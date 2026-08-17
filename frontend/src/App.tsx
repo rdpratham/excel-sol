@@ -1,14 +1,28 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { LoginPage } from '@/pages/LoginPage'
-import { DashboardPage } from '@/pages/DashboardPage'
-import { UploadPage } from '@/pages/UploadPage'
-import { FilesPage } from '@/pages/FilesPage'
-import { SheetPage } from '@/pages/SheetPage'
 import { Toaster } from '@/components/ui/toaster'
 import { useAuthStore } from '@/stores/authStore'
 import { authApi } from '@/lib/api'
+
+// Route-level code splitting: SheetPage alone pulls in glide-data-grid,
+// which was ~700KB of the ~760KB single bundle every page paid for on
+// first load. Splitting it (and the other pages) into separate chunks
+// means Login/Dashboard/Upload/Files load fast, and the grid's weight is
+// only ever fetched when someone actually opens a sheet.
+const LoginPage = lazy(() => import('@/pages/LoginPage').then((m) => ({ default: m.LoginPage })))
+const DashboardPage = lazy(() => import('@/pages/DashboardPage').then((m) => ({ default: m.DashboardPage })))
+const UploadPage = lazy(() => import('@/pages/UploadPage').then((m) => ({ default: m.UploadPage })))
+const FilesPage = lazy(() => import('@/pages/FilesPage').then((m) => ({ default: m.FilesPage })))
+const SheetPage = lazy(() => import('@/pages/SheetPage').then((m) => ({ default: m.SheetPage })))
+
+function RouteFallback() {
+  return (
+    <div className="flex h-screen items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+    </div>
+  )
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -66,6 +80,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthBootstrap>
+          <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route
               path="/login"
@@ -109,6 +124,7 @@ export default function App() {
             />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </Suspense>
           <Toaster />
         </AuthBootstrap>
       </BrowserRouter>

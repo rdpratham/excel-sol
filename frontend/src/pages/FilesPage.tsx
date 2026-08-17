@@ -4,6 +4,7 @@ import { FileSpreadsheet, Loader2, Trash2 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AppShell } from '@/components/layout/AppShell'
 import { filesApi } from '@/lib/api'
+import { prefetchSheetPage } from '@/lib/prefetch'
 import { toast } from '@/hooks/useToast'
 import type { SpreadsheetFile } from '@/types'
 
@@ -23,6 +24,7 @@ function SheetTile({ sheet, onOpen }: SheetTileProps) {
     <button
       className="hover-lift flex flex-col items-center gap-1.5 rounded-xl border border-transparent p-3 text-center hover:border-border hover:bg-accent"
       onClick={onOpen}
+      onMouseEnter={prefetchSheetPage}
       title={sheet.name}
     >
       <FileSpreadsheet className="h-14 w-14 text-emerald-500" strokeWidth={1.1} />

@@ -5,6 +5,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { AppShell } from '@/components/layout/AppShell'
 import { useAuthStore } from '@/stores/authStore'
 import { statsApi } from '@/lib/api'
+import { prefetchSheetPage } from '@/lib/prefetch'
 import { cn } from '@/lib/utils'
 import type { SpreadsheetFile, Sheet } from '@/types'
 
@@ -161,6 +162,7 @@ export function DashboardPage() {
                     key={file.id}
                     className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-accent/60"
                     onClick={() => file.sheets[0] && handleSheetSelect(file, file.sheets[0])}
+                    onMouseEnter={prefetchSheetPage}
                   >
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
                       <FileSpreadsheet className="h-[18px] w-[18px] text-emerald-500" />
