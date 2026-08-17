@@ -1,5 +1,12 @@
-# Render Blueprint — Phase 6 will complete this.
-# This skeleton documents the intended service topology.
+# MindSpread — Render Blueprint
+# Deploy with: connect this repo in Render → New → Blueprint
+#
+# Service URLs (assuming default service names):
+#   Backend  : https://mindspread-api.onrender.com
+#   Frontend : https://mindspread-frontend.onrender.com
+#
+# After the first deploy, verify FRONTEND_ORIGIN and VITE_API_URL match the
+# actual service URLs, then trigger a redeploy of both services.
 
 services:
   # ── Backend API ──────────────────────────────────────────────────────────────
@@ -8,10 +15,13 @@ services:
     env: python
     region: oregon
     plan: starter
-    buildCommand: pip install -r backend/requirements.txt && cd backend && alembic upgrade head
-    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # Migrations run before the server starts on every deploy.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # Render injects postgres:// — config.py normalises it to postgresql+asyncpg://
       - key: DATABASE_URL
         fromDatabase:
           name: mindspread-db
@@ -23,35 +33,62 @@ services:
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
+      # Must match the deployed frontend URL exactly (no trailing slash).
       - key: FRONTEND_ORIGIN
-        value: https://mindspread.onrender.com  # update after frontend deploy
+        value: https://mindspread-frontend.onrender.com
       - key: ENVIRONMENT
         value: production
+      - key: MAX_UPLOAD_MB
+        value: "50"
+      # Set these manually in the Render dashboard — do NOT commit real values.
       - key: ANTHROPIC_API_KEY
-        sync: false  # set manually in dashboard
+        sync: false
       - key: SENTRY_DSN
         sync: false
+      # Render uses Python 3.12 when this env var is set
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+
+  # ── Redis Key Value ───────────────────────────────────────────────────────────
+  - type: redis
+    name: mindspread-redis
+    plan: starter
+    maxmemoryPolicy: noeviction
+    ipAllowList: []   # private — only accessible within the same Render region
 
   # ── Frontend static site ─────────────────────────────────────────────────────
   - type: web
     name: mindspread-frontend
     env: static
-    buildCommand: cd frontend && npm ci && npm run build
-    staticPublishPath: frontend/dist
+    region: oregon
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
     envVars:
+      # Must match the deployed backend URL exactly.
       - key: VITE_API_URL
-        value: https://mindspread-api.onrender.com  # update to actual backend URL
+        value: https://mindspread-api.onrender.com
 
-  # ── Background worker (Phase 2+) ─────────────────────────────────────────────
+  # ── Background worker — uncomment in Phase 2 ─────────────────────────────────
   # - type: worker
   #   name: mindspread-worker
   #   env: python
-  #   buildCommand: pip install -r backend/requirements.txt
-  #   startCommand: cd backend && arq app.worker.WorkerSettings
+  #   region: oregon
+  #   plan: starter
+  #   rootDir: backend
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: arq app.worker.WorkerSettings
   #   envVars:
   #     - key: DATABASE_URL
   #       fromDatabase:
@@ -62,13 +99,10 @@ services:
   #         type: redis
   #         name: mindspread-redis
   #         property: connectionString
+  #     - key: PYTHON_VERSION
+  #       value: "3.12.0"
 
 databases:
   - name: mindspread-db
     databaseName: mindspread
     plan: starter
-
-  - name: mindspread-redis
-    type: redis
-    plan: starter
-    maxmemoryPolicy: noeviction

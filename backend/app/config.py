@@ -1,12 +1,27 @@
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Database — asyncpg URL for the app; env.py converts to psycopg2 for alembic
+    # Render provides postgres:// — the validator normalises it to postgresql+asyncpg://
     DATABASE_URL: str = "postgresql+asyncpg://mindspread:mindspread@localhost:5432/mindspread"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalise_db_url(cls, v: str) -> str:
+        """
+        Render's Postgres connectionString starts with postgres:// which
+        SQLAlchemy 2.0 + asyncpg rejects. Normalise on load so the rest of
+        the codebase never has to care.
+        """
+        if v.startswith("postgres://"):
+            return "postgresql+asyncpg://" + v[len("postgres://"):]
+        if v.startswith("postgresql://") and "+asyncpg" not in v:
+            return "postgresql+asyncpg://" + v[len("postgresql://"):]
+        return v
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
@@ -34,7 +49,7 @@ class Settings(BaseSettings):
 
     @property
     def sync_database_url(self) -> str:
-        """Convert asyncpg URL to psycopg2 URL for Alembic."""
+        """psycopg2 URL for Alembic (sync driver)."""
         return self.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 
