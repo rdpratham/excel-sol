@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentUser, get_db
 from app.models.file import File, FileStatus
 from app.models.sheet import CellEdit, Sheet, SheetRow
+from app.ws.manager import manager
 
 router = APIRouter(tags=["rows"])
 
@@ -109,6 +110,13 @@ async def patch_row(
     db.add_all(audit_entries)
     await db.commit()
 
+    await manager.publish(str(sheet_id), {
+        "type": "cell_edit",
+        "row_index": row_index,
+        "cells": [{"col_key": c.col_key, "value": c.value} for c in body.cells],
+        "user_id": str(user.id),
+    })
+
     return {"row_index": row_index, "data": new_data}
 
 
@@ -140,6 +148,13 @@ async def append_row(
         update(File).where(File.id == file_id).values(total_rows=File.total_rows + 1)
     )
     await db.commit()
+
+    await manager.publish(str(sheet_id), {
+        "type": "row_added",
+        "row_index": new_index,
+        "data": body.data,
+        "user_id": str(user.id),
+    })
 
     return {"row_index": new_index, "data": body.data}
 
@@ -189,6 +204,13 @@ async def delete_rows(
         update(File).where(File.id == file_id).values(total_rows=File.total_rows - delta)
     )
     await db.commit()
+
+    await manager.publish(str(sheet_id), {
+        "type": "rows_deleted",
+        "row_indexes": sorted(to_delete),
+        "remaining": new_count,
+        "user_id": str(user.id),
+    })
 
     return {"deleted": len(to_delete), "remaining": new_count}
 

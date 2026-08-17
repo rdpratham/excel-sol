@@ -12,8 +12,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/button'
 import { SpreadsheetGrid, type GridRow } from '@/components/grid/SpreadsheetGrid'
+import { PresenceBar } from '@/components/grid/PresenceBar'
 import { filesApi, rowsApi } from '@/lib/api'
 import { useAuthStore } from '@/stores/authStore'
+import { useSheetSocket } from '@/hooks/useSheetSocket'
 import { toast } from '@/hooks/useToast'
 import type { SpreadsheetFile, Sheet } from '@/types'
 
@@ -67,6 +69,35 @@ export function SheetPage() {
       setTotalRows(rowsData.total)
     }
   }, [rowsData])
+
+  // ── Real-time sync — other tabs/users editing the same sheet ───────────────
+  // Cell edits apply straight to local state (indices are stable). Row
+  // add/delete can shift every row_index after them, so those just refetch
+  // the current page rather than trying to patch indices locally.
+  const handleRemoteCellEdit = useCallback(
+    (rowIndex: number, cells: { col_key: string; value: unknown }[]) => {
+      setLocalRows((prev) => {
+        if (rowIndex >= prev.length) return prev
+        const next = [...prev]
+        const patch: GridRow = {}
+        cells.forEach((c) => { patch[c.col_key] = c.value })
+        next[rowIndex] = { ...next[rowIndex], ...patch }
+        return next
+      })
+    },
+    [],
+  )
+
+  const handleRemoteRowsChanged = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['rows', fileId, sheetId, page] })
+    queryClient.invalidateQueries({ queryKey: ['stats'] })
+  }, [queryClient, fileId, sheetId, page])
+
+  const { presence } = useSheetSocket(sheetId, {
+    onCellEdit: handleRemoteCellEdit,
+    onRowAdded: handleRemoteRowsChanged,
+    onRowsDeleted: handleRemoteRowsChanged,
+  })
 
   // ── Cell edit — instant local update + debounced save ─────────────────────
   const handleCellEdited = useCallback(
@@ -228,6 +259,9 @@ export function SheetPage() {
               {totalRows.toLocaleString()} rows · {columns.length} cols
             </p>
           )}
+
+          {/* Who else is viewing this sheet right now */}
+          <PresenceBar users={presence} />
 
           <div className="h-4 w-px bg-border" />
 

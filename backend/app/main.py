@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1.router import router as api_v1_router
+from app.api.v1.ws import router as ws_router
 from app.config import settings
 from app.core.logging import RequestLoggingMiddleware, setup_logging
 
@@ -81,3 +82,4 @@ async def ready() -> dict[str, Any]:
 # ── API router ─────────────────────────────────────────────────────────────────
 
 app.include_router(api_v1_router, prefix="/api/v1")
+app.include_router(ws_router)
