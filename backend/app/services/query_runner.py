@@ -98,7 +98,7 @@ def run_query(parsed: ParsedQuery, rows: list[dict], columns_meta: list[dict]) -
 
 
 def run_raw_sql(sql: str, rows: list[dict], columns_meta: list[dict]) -> dict:
-    """Executes an already-validated SELECT statement (from ai_query.generate_sql)
+    """Executes an already-validated SELECT statement (from ai_query.classify)
     against the sheet's data. Runs on a *sandboxed* connection with external
     access disabled — no filesystem or network functions (read_csv, httpfs,
     etc.) are reachable, so the only data this SQL can ever see is the
