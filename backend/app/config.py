@@ -37,9 +37,6 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     MAX_UPLOAD_MB: int = 50
 
-    # AI
-    ANTHROPIC_API_KEY: Optional[str] = None
-
     # Observability
     SENTRY_DSN: Optional[str] = None
 

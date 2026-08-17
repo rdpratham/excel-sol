@@ -40,9 +40,7 @@ services:
         value: production
       - key: MAX_UPLOAD_MB
         value: "50"
-      # Set these manually in the Render dashboard — do NOT commit real values.
-      - key: ANTHROPIC_API_KEY
-        sync: false
+      # Set this manually in the Render dashboard — do NOT commit real values.
       - key: SENTRY_DSN
         sync: false
       # Render uses Python 3.12 when this env var is set
