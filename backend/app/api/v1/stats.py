@@ -87,6 +87,7 @@ def _file_to_dict(f: File) -> dict:
                 "row_count": s.row_count,
                 "col_count": s.col_count,
                 "columns": s.columns or [],
+                "cell_styles": s.cell_styles or {},
                 "created_at": s.created_at.isoformat(),
             }
             for s in (f.sheets or [])

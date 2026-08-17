@@ -38,6 +38,7 @@ class SheetOut(BaseModel):
     row_count: int
     col_count: int
     columns: list
+    cell_styles: dict
     created_at: datetime
 
     model_config = {"from_attributes": True}

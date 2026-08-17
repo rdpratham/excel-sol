@@ -1,7 +1,10 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/authStore'
 import type {
+  CellAlign,
+  CellStylePatch,
   DashboardStats,
+  NumberFormat,
   QueryHistoryEntry,
   QueryResult,
   RowsResponse,
@@ -137,6 +140,30 @@ export const rowsApi = {
 
   exportUrl: (fileId: string, sheetId: string) =>
     `${api.defaults.baseURL}/files/${fileId}/sheets/${sheetId}/export`,
+}
+
+// ── Formatting — number format/align, per-cell style, column insert/delete ────
+
+export const formattingApi = {
+  updateColumnFormat: (
+    fileId: string,
+    sheetId: string,
+    colKey: string,
+    body: { number_format?: NumberFormat; align?: CellAlign },
+  ) => api.patch(`/files/${fileId}/sheets/${sheetId}/columns/${encodeURIComponent(colKey)}/format`, body),
+
+  updateCellStyle: (
+    fileId: string,
+    sheetId: string,
+    cells: { row_index: number; col_key: string }[],
+    style: CellStylePatch,
+  ) => api.patch(`/files/${fileId}/sheets/${sheetId}/cell-style`, { cells, style }),
+
+  addColumn: (fileId: string, sheetId: string, name: string, dtype = 'text', position?: number) =>
+    api.post(`/files/${fileId}/sheets/${sheetId}/columns`, { name, dtype, position }),
+
+  deleteColumn: (fileId: string, sheetId: string, colKey: string) =>
+    api.delete(`/files/${fileId}/sheets/${sheetId}/columns/${encodeURIComponent(colKey)}`),
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────

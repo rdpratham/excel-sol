@@ -10,16 +10,19 @@ import {
   Undo2,
 } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { CompactSelection, type GridSelection } from '@glideapps/glide-data-grid'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/button'
 import { SpreadsheetGrid, type GridRow } from '@/components/grid/SpreadsheetGrid'
 import { PresenceBar } from '@/components/grid/PresenceBar'
+import { HomeRibbon } from '@/components/grid/HomeRibbon'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { filesApi, rowsApi } from '@/lib/api'
+import { mergeCellStylePatch } from '@/lib/cellFormat'
 import { useAuthStore } from '@/stores/authStore'
 import { useSheetSocket } from '@/hooks/useSheetSocket'
 import { toast } from '@/hooks/useToast'
-import type { SpreadsheetFile, Sheet } from '@/types'
+import type { CellStyle, CellStylePatch, SheetColumn, SpreadsheetFile, Sheet } from '@/types'
 
 const PAGE_SIZE = 500
 
@@ -42,6 +45,15 @@ export function SheetPage() {
   const [totalRows, setTotalRows] = useState(0)
   const [selectedRows, setSelectedRows] = useState<number[]>([])
   const [chatOpen, setChatOpen] = useState(false)
+
+  // Formatting — synced from the sheet, then mutated locally + via WS broadcasts
+  const [columnsState, setColumnsState] = useState<SheetColumn[]>([])
+  const [cellStyles, setCellStyles] = useState<Record<string, CellStyle>>({})
+  const [gridSelection, setGridSelection] = useState<GridSelection>({
+    columns: CompactSelection.empty(),
+    rows: CompactSelection.empty(),
+    current: undefined,
+  })
 
   // Undo / redo stacks
   const undoStack = useRef<HistoryEntry[]>([])
@@ -73,6 +85,17 @@ export function SheetPage() {
     }
   }, [rowsData])
 
+  // Columns can come from the sheet (preferred) or the rows page response;
+  // re-sync whenever either query returns fresh data (e.g. after insert/delete column).
+  useEffect(() => {
+    const cols = sheet?.columns ?? rowsData?.columns
+    if (cols) setColumnsState(cols)
+  }, [sheet, rowsData])
+
+  useEffect(() => {
+    if (sheet?.cell_styles) setCellStyles(sheet.cell_styles)
+  }, [sheet])
+
   // ── Real-time sync — other tabs/users editing the same sheet ───────────────
   // Cell edits apply straight to local state (indices are stable). Row
   // add/delete can shift every row_index after them, so those just refetch
@@ -96,10 +119,35 @@ export function SheetPage() {
     queryClient.invalidateQueries({ queryKey: ['stats'] })
   }, [queryClient, fileId, sheetId, page])
 
+  const handleRemoteCellStyle = useCallback(
+    (cells: { row_index: number; col_key: string }[], style: Record<string, unknown>) => {
+      setCellStyles((prev) => mergeCellStylePatch(prev, cells, style))
+    },
+    [],
+  )
+
+  const handleRemoteColumnFormat = useCallback((colKey: string, format?: string, align?: string) => {
+    setColumnsState((prev) =>
+      prev.map((c) =>
+        c.name === colKey
+          ? { ...c, format: format as SheetColumn['format'], align: align as SheetColumn['align'] }
+          : c,
+      ),
+    )
+  }, [])
+
+  const handleRemoteColumnsChanged = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['file', fileId] })
+    queryClient.invalidateQueries({ queryKey: ['rows', fileId, sheetId, page] })
+  }, [queryClient, fileId, sheetId, page])
+
   const { presence } = useSheetSocket(sheetId, {
     onCellEdit: handleRemoteCellEdit,
     onRowAdded: handleRemoteRowsChanged,
     onRowsDeleted: handleRemoteRowsChanged,
+    onCellStyle: handleRemoteCellStyle,
+    onColumnFormat: handleRemoteColumnFormat,
+    onColumnsChanged: handleRemoteColumnsChanged,
   })
 
   // ── Cell edit — instant local update + debounced save ─────────────────────
@@ -243,11 +291,27 @@ export function SheetPage() {
     navigate(`/files/${f.id}/sheets/${s.id}`)
   }
 
-  const columns = sheet?.columns ?? rowsData?.columns ?? []
+  const columns = columnsState.length > 0 ? columnsState : (sheet?.columns ?? rowsData?.columns ?? [])
 
   return (
     <AppShell activeSheetId={sheetId} onSheetSelect={handleSheetSelect}>
       <div className="flex h-full flex-col">
+        {/* ── Home ribbon — Excel-style formatting ─────────────────────── */}
+        {fileId && sheetId && columns.length > 0 && (
+          <HomeRibbon
+            fileId={fileId}
+            sheetId={sheetId}
+            columns={columns}
+            rowCount={localRows.length}
+            selection={gridSelection}
+            onCellStyleApplied={(cells, patch: CellStylePatch) =>
+              setCellStyles((prev) => mergeCellStylePatch(prev, cells, patch))
+            }
+            onColumnFormatApplied={(colKey, patch) => handleRemoteColumnFormat(colKey, patch.format, patch.align)}
+            onColumnsMutated={handleRemoteColumnsChanged}
+          />
+        )}
+
         {/* ── Toolbar ───────────────────────────────────────────────────── */}
         <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
           {/* File / sheet name */}
@@ -335,8 +399,10 @@ export function SheetPage() {
                 columns={columns}
                 rows={localRows}
                 totalRows={totalRows}
+                cellStyles={cellStyles}
                 onCellEdited={handleCellEdited}
                 onSelectionChange={setSelectedRows}
+                onFullSelectionChange={setGridSelection}
               />
             )}
           </div>

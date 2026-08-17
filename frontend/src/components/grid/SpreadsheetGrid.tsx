@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import DataEditor, {
+  type CellClickedEventArgs,
   type EditableGridCell,
   type GridCell,
   type GridColumn,
+  type Theme,
   GridCellKind,
   type Item,
   CompactSelection,
   type GridSelection,
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
-import type { SheetColumn } from '@/types'
+import { cellStyleKey, effectiveAlign, formatDisplayValue } from '@/lib/cellFormat'
+import type { CellStyle, SheetColumn } from '@/types'
 
 export interface GridRow {
   [key: string]: unknown
@@ -19,8 +22,10 @@ interface SpreadsheetGridProps {
   columns: SheetColumn[]
   rows: GridRow[]
   totalRows: number
+  cellStyles?: Record<string, CellStyle>
   onCellEdited: (rowIndex: number, colKey: string, value: unknown) => void
   onSelectionChange?: (selectedRows: number[]) => void
+  onFullSelectionChange?: (selection: GridSelection) => void
   isLoading?: boolean
 }
 
@@ -86,8 +91,10 @@ const LIGHT_THEME = {
 export function SpreadsheetGrid({
   columns,
   rows,
+  cellStyles = {},
   onCellEdited,
   onSelectionChange,
+  onFullSelectionChange,
 }: SpreadsheetGridProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
@@ -122,6 +129,11 @@ export function SpreadsheetGrid({
     onSelectionChange(selected)
   }, [selection, onSelectionChange])
 
+  // Notify parent of the full selection (used by the formatting ribbon)
+  useEffect(() => {
+    onFullSelectionChange?.(selection)
+  }, [selection, onFullSelectionChange])
+
   const gridColumns: GridColumn[] = useMemo(
     () =>
       columns.map((col) => ({
@@ -135,20 +147,38 @@ export function SpreadsheetGrid({
 
   const getCellContent = useCallback(
     ([col, row]: Item): GridCell => {
-      const colName = columns[col]?.name
+      const column = columns[col]
+      const colName = column?.name
       const rowData = rows[row]
       const val = rowData?.[colName] ?? ''
       const strVal = val == null ? '' : String(val)
 
+      const style = cellStyles[cellStyleKey(row, colName)]
+      const displayData = formatDisplayValue(val, column?.format)
+      const align = effectiveAlign(style, column)
+
+      const themeOverride: Partial<Theme> | undefined =
+        style?.bold || style?.italic || style?.font_color || style?.bg_color
+          ? {
+              ...(style.font_color ? { textDark: style.font_color } : {}),
+              ...(style.bg_color ? { bgCell: style.bg_color } : {}),
+              ...(style.bold || style.italic
+                ? { baseFontStyle: `${style.italic ? 'italic ' : ''}${style.bold ? 'bold ' : ''}13px`.trim() }
+                : {}),
+            }
+          : undefined
+
       return {
         kind: GridCellKind.Text,
         data: strVal,
-        displayData: strVal,
+        displayData,
         allowOverlay: true,
         readonly: false,
+        contentAlign: align,
+        themeOverride,
       }
     },
-    [columns, rows],
+    [columns, rows, cellStyles],
   )
 
   const onCellEditedHandler = useCallback(
@@ -159,6 +189,21 @@ export function SpreadsheetGrid({
       onCellEdited(row, colName, value)
     },
     [columns, onCellEdited],
+  )
+
+  // Ctrl/Cmd+click a cell containing a URL to open it in a new tab, Excel-hyperlink-style
+  const onCellClicked = useCallback(
+    ([col, row]: Item, event: CellClickedEventArgs) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      const colName = columns[col]?.name
+      const val = rows[row]?.[colName]
+      const str = val == null ? '' : String(val).trim()
+      if (/^https?:\/\/\S+$/i.test(str)) {
+        event.preventDefault()
+        window.open(str, '_blank', 'noopener,noreferrer')
+      }
+    },
+    [columns, rows],
   )
 
   if (columns.length === 0) return null
@@ -172,6 +217,7 @@ export function SpreadsheetGrid({
         rows={rows.length}
         getCellContent={getCellContent}
         onCellEdited={onCellEditedHandler}
+        onCellClicked={onCellClicked}
         rowMarkers="number"
         smoothScrollX
         smoothScrollY

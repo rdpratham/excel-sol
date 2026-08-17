@@ -29,6 +29,27 @@ interface RowsDeletedMsg {
   user_id: string
 }
 
+interface CellStyleMsg {
+  type: 'cell_style'
+  cells: { row_index: number; col_key: string }[]
+  style: Record<string, unknown>
+  user_id: string
+}
+
+interface ColumnFormatMsg {
+  type: 'column_format'
+  col_key: string
+  format?: string
+  align?: string
+  user_id: string
+}
+
+interface ColumnsChangedMsg {
+  type: 'columns_changed'
+  columns: unknown[]
+  user_id: string
+}
+
 interface PresenceStateMsg {
   type: 'presence_state'
   users: PresenceUser[]
@@ -52,11 +73,17 @@ type ServerMsg =
   | PresenceStateMsg
   | PresenceJoinMsg
   | PresenceLeaveMsg
+  | CellStyleMsg
+  | ColumnFormatMsg
+  | ColumnsChangedMsg
 
 interface UseSheetSocketHandlers {
   onCellEdit?: (rowIndex: number, cells: { col_key: string; value: unknown }[]) => void
   onRowAdded?: () => void
   onRowsDeleted?: () => void
+  onCellStyle?: (cells: { row_index: number; col_key: string }[], style: Record<string, unknown>) => void
+  onColumnFormat?: (colKey: string, format?: string, align?: string) => void
+  onColumnsChanged?: () => void
 }
 
 const MAX_BACKOFF_MS = 10_000
@@ -115,6 +142,15 @@ export function useSheetSocket(sheetId: string | undefined, handlers: UseSheetSo
             break
           case 'rows_deleted':
             handlersRef.current.onRowsDeleted?.()
+            break
+          case 'cell_style':
+            handlersRef.current.onCellStyle?.(msg.cells, msg.style)
+            break
+          case 'column_format':
+            handlersRef.current.onColumnFormat?.(msg.col_key, msg.format, msg.align)
+            break
+          case 'columns_changed':
+            handlersRef.current.onColumnsChanged?.()
             break
         }
       }

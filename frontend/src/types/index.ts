@@ -20,11 +20,35 @@ export interface TokenResponse {
 
 export type FileStatus = 'uploading' | 'processing' | 'ready' | 'failed'
 
+export type NumberFormat = 'general' | 'number' | 'currency' | 'percent'
+export type CellAlign = 'left' | 'center' | 'right'
+
 export interface SheetColumn {
   name: string
   dtype: string
   index: number
   width: number
+  format?: NumberFormat
+  align?: CellAlign
+}
+
+export interface CellStyle {
+  bold?: boolean
+  italic?: boolean
+  font_color?: string
+  bg_color?: string
+  align?: CellAlign
+}
+
+// A PATCH payload: `null` on a field explicitly clears that override (vs.
+// `undefined`, which leaves it untouched) — mirrors the backend's
+// exclude_unset semantics for merging into the sparse cell_styles map.
+export interface CellStylePatch {
+  bold?: boolean | null
+  italic?: boolean | null
+  font_color?: string | null
+  bg_color?: string | null
+  align?: CellAlign | null
 }
 
 export interface Sheet {
@@ -35,6 +59,7 @@ export interface Sheet {
   row_count: number
   col_count: number
   columns: SheetColumn[]
+  cell_styles: Record<string, CellStyle>
   created_at: string
 }
 

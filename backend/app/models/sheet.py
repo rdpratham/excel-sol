@@ -28,8 +28,13 @@ class Sheet(UUIDPrimaryKey, Base):
     sheet_index: Mapped[int] = mapped_column(Integer, nullable=False)
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     col_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # columns JSON: [{name, dtype, index, width}, ...]
+    # columns JSON: [{name, dtype, index, width, format?, align?}, ...]
+    # format: "general" | "number" | "currency" | "percent"; align: "left" | "center" | "right"
     columns: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+    # Sparse per-cell style overrides, keyed "{row_index}:{col_key}" ->
+    # {bold?, italic?, font_color?, bg_color?, align?}. Column-level format/align
+    # above covers whole-column formatting cheaply; this covers individual cells.
+    cell_styles: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     )
