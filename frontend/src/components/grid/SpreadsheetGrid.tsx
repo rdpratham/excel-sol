@@ -115,6 +115,15 @@ export function SpreadsheetGrid({
   })
   const [rowBuffer, setRowBuffer] = useState(INITIAL_ROW_BUFFER)
   const [colBuffer, setColBuffer] = useState(INITIAL_COL_BUFFER)
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+
+  // Column resize (drag the header border, Excel-style) — glide-data-grid
+  // supports the drag itself out of the box, but won't persist the new
+  // width anywhere unless the caller stores it and feeds it back in.
+  const onColumnResize = useCallback((column: GridColumn, newSize: number) => {
+    if (!column.id) return
+    setColumnWidths((prev) => ({ ...prev, [column.id as string]: newSize }))
+  }, [])
 
   // Grow the blank buffer as the user scrolls toward its edge, so it feels
   // like an unbounded canvas rather than a fixed-size padded table.
@@ -164,20 +173,21 @@ export function SpreadsheetGrid({
     const real = columns.map((col) => ({
       title: col.name,
       id: col.name,
-      width: col.width ?? 150,
+      width: columnWidths[col.name] ?? col.width ?? 150,
     }))
     const phantomCount = Math.max(colBuffer, 1)
     const phantom = Array.from({ length: phantomCount }, (_, i) => {
       const absoluteIndex = columns.length + i
+      const id = `__phantom_col_${absoluteIndex}`
       return {
         title: colIndexToLetters(absoluteIndex),
-        id: `__phantom_col_${absoluteIndex}`,
-        width: 120,
+        id,
+        width: columnWidths[id] ?? 120,
         grow: i === phantomCount - 1 ? 1 : undefined,
       }
     })
     return [...real, ...phantom]
-  }, [columns, colBuffer])
+  }, [columns, colBuffer, columnWidths])
 
   const getCellContent = useCallback(
     ([col, row]: Item): GridCell => {
@@ -268,6 +278,7 @@ export function SpreadsheetGrid({
         onCellEdited={onCellEditedHandler}
         onCellClicked={onCellClicked}
         onVisibleRegionChanged={onVisibleRegionChanged}
+        onColumnResize={onColumnResize}
         rowMarkers="number"
         smoothScrollX
         smoothScrollY
