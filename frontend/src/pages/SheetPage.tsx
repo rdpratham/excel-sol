@@ -55,6 +55,10 @@ export function SheetPage() {
     rows: CompactSelection.empty(),
     current: undefined,
   })
+  // A column filter can make the display non-contiguous in real row indices,
+  // which breaks range-based per-cell formatting (bold/italic/colors/align) —
+  // disable just those ribbon actions while any filter is active.
+  const [filterActive, setFilterActive] = useState(false)
 
   // Undo / redo stacks
   const undoStack = useRef<HistoryEntry[]>([])
@@ -343,6 +347,7 @@ export function SheetPage() {
             }
             onColumnFormatApplied={(colKey, patch) => handleRemoteColumnFormat(colKey, patch.format, patch.align)}
             onColumnsMutated={handleRemoteColumnsChanged}
+            disableCellActions={filterActive}
           />
         )}
 
@@ -433,6 +438,7 @@ export function SheetPage() {
                 onCellEdited={handleCellEdited}
                 onSelectionChange={setSelectedRows}
                 onFullSelectionChange={setGridSelection}
+                onFilterActiveChange={setFilterActive}
               />
             )}
           </div>

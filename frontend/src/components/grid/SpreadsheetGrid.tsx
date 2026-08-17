@@ -13,6 +13,7 @@ import DataEditor, {
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
 import { cellStyleKey, colIndexToLetters, effectiveAlign, formatDisplayValue } from '@/lib/cellFormat'
+import { ColumnFilterPopover } from './ColumnFilterPopover'
 import type { CellStyle, SheetColumn } from '@/types'
 
 export interface GridRow {
@@ -29,6 +30,11 @@ interface SpreadsheetGridProps {
   onCellEdited: (rowIndex: number, colKey: string, value: unknown, isNewColumn?: boolean) => void
   onSelectionChange?: (selectedRows: number[]) => void
   onFullSelectionChange?: (selection: GridSelection) => void
+  // Fires whenever a column filter is applied/cleared, so the parent can
+  // disable per-cell formatting actions — a filtered display can be
+  // non-contiguous in real row indices, and range-based cell styling
+  // assumes display position === row index.
+  onFilterActiveChange?: (active: boolean) => void
   isLoading?: boolean
 }
 
@@ -105,6 +111,7 @@ export function SpreadsheetGrid({
   onCellEdited,
   onSelectionChange,
   onFullSelectionChange,
+  onFilterActiveChange,
 }: SpreadsheetGridProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 })
@@ -116,6 +123,63 @@ export function SpreadsheetGrid({
   const [rowBuffer, setRowBuffer] = useState(INITIAL_ROW_BUFFER)
   const [colBuffer, setColBuffer] = useState(INITIAL_COL_BUFFER)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+
+  // Column filter (Autofilter) — colKey -> allowed values. Absent entry, or
+  // an entry covering every value, means "no filter" for that column.
+  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({})
+  const [filterPopover, setFilterPopover] = useState<{ colKey: string; x: number; y: number } | null>(null)
+
+  const hasActiveFilter = Object.keys(columnFilters).length > 0
+  useEffect(() => { onFilterActiveChange?.(hasActiveFilter) }, [hasActiveFilter, onFilterActiveChange])
+
+  // Real row indices that pass every active filter, in order — the display
+  // list is this array's positions; toRealRow() below maps back.
+  const visibleRowIndices = useMemo(() => {
+    if (!hasActiveFilter) return null
+    const active = Object.entries(columnFilters)
+    const indices: number[] = []
+    rows.forEach((r, i) => {
+      const passes = active.every(([colKey, allowed]) => {
+        const v = r?.[colKey]
+        return allowed.has(v == null ? '' : String(v))
+      })
+      if (passes) indices.push(i)
+    })
+    return indices
+  }, [rows, columnFilters, hasActiveFilter])
+
+  // Translate a display-row position (what glide-data-grid gives every
+  // callback) to the real row index (what onCellEdited/selection callbacks
+  // must report). Phantom rows beyond the filtered set still map to real
+  // trailing indices past the sheet's true row count.
+  const toRealRow = useCallback(
+    (displayRow: number): number => {
+      if (!visibleRowIndices) return displayRow
+      if (displayRow < visibleRowIndices.length) return visibleRowIndices[displayRow]
+      return rows.length + (displayRow - visibleRowIndices.length)
+    },
+    [visibleRowIndices, rows.length],
+  )
+
+  const displayRowCount = visibleRowIndices ? visibleRowIndices.length : rows.length
+
+  const uniqueValuesFor = useCallback(
+    (colKey: string) => {
+      const set = new Set<string>()
+      rows.forEach((r) => { const v = r?.[colKey]; set.add(v == null ? '' : String(v)) })
+      return Array.from(set).sort()
+    },
+    [rows],
+  )
+
+  const onHeaderMenuClick = useCallback(
+    (col: number, bounds: Rectangle) => {
+      const column = columns[col]
+      if (!column) return
+      setFilterPopover({ colKey: column.name, x: bounds.x, y: bounds.y + bounds.height })
+    },
+    [columns],
+  )
 
   // Column resize (drag the header border, Excel-style) — glide-data-grid
   // supports the drag itself out of the box, but won't persist the new
@@ -129,14 +193,14 @@ export function SpreadsheetGrid({
   // like an unbounded canvas rather than a fixed-size padded table.
   const onVisibleRegionChanged = useCallback(
     (range: Rectangle) => {
-      if (range.y + range.height >= rows.length + rowBuffer - GROWTH_THRESHOLD) {
+      if (range.y + range.height >= displayRowCount + rowBuffer - GROWTH_THRESHOLD) {
         setRowBuffer((n) => n + BUFFER_GROWTH)
       }
       if (range.x + range.width >= columns.length + colBuffer - GROWTH_THRESHOLD) {
         setColBuffer((n) => n + BUFFER_GROWTH)
       }
     },
-    [rows.length, columns.length, rowBuffer, colBuffer],
+    [displayRowCount, columns.length, rowBuffer, colBuffer],
   )
 
   // Detect dark mode
@@ -156,13 +220,13 @@ export function SpreadsheetGrid({
     return () => ro.disconnect()
   }, [])
 
-  // Notify parent of row selection
+  // Notify parent of row selection (translated to real row indices)
   useEffect(() => {
     if (!onSelectionChange) return
     const selected: number[] = []
-    selection.rows.toArray().forEach((i) => selected.push(i))
+    selection.rows.toArray().forEach((i) => selected.push(toRealRow(i)))
     onSelectionChange(selected)
-  }, [selection, onSelectionChange])
+  }, [selection, onSelectionChange, toRealRow])
 
   // Notify parent of the full selection (used by the formatting ribbon)
   useEffect(() => {
@@ -171,9 +235,10 @@ export function SpreadsheetGrid({
 
   const gridColumns: GridColumn[] = useMemo(() => {
     const real = columns.map((col) => ({
-      title: col.name,
+      title: columnFilters[col.name] ? `${col.name} ▾` : col.name,
       id: col.name,
       width: columnWidths[col.name] ?? col.width ?? 150,
+      hasMenu: true,
     }))
     const phantomCount = Math.max(colBuffer, 1)
     const phantom = Array.from({ length: phantomCount }, (_, i) => {
@@ -190,7 +255,7 @@ export function SpreadsheetGrid({
   }, [columns, colBuffer, columnWidths])
 
   const getCellContent = useCallback(
-    ([col, row]: Item): GridCell => {
+    ([col, displayRow]: Item): GridCell => {
       const column = columns[col]
 
       if (!column) {
@@ -204,6 +269,7 @@ export function SpreadsheetGrid({
         }
       }
 
+      const row = toRealRow(displayRow)
       const colName = column.name
       const rowData = rows[row]
       const val = rowData?.[colName] ?? ''
@@ -234,11 +300,12 @@ export function SpreadsheetGrid({
         themeOverride,
       }
     },
-    [columns, rows, cellStyles],
+    [columns, rows, cellStyles, toRealRow],
   )
 
   const onCellEditedHandler = useCallback(
-    ([col, row]: Item, newVal: EditableGridCell) => {
+    ([col, displayRow]: Item, newVal: EditableGridCell) => {
+      const row = toRealRow(displayRow)
       const value = newVal.kind === GridCellKind.Text ? newVal.data : String((newVal as { data: unknown }).data)
       const column = columns[col]
       if (column) {
@@ -249,13 +316,14 @@ export function SpreadsheetGrid({
         onCellEdited(row, colIndexToLetters(col), value, true)
       }
     },
-    [columns, onCellEdited],
+    [columns, onCellEdited, toRealRow],
   )
 
   // Ctrl/Cmd+click a cell containing a URL to open it in a new tab, Excel-hyperlink-style
   const onCellClicked = useCallback(
-    ([col, row]: Item, event: CellClickedEventArgs) => {
+    ([col, displayRow]: Item, event: CellClickedEventArgs) => {
       if (!event.ctrlKey && !event.metaKey) return
+      const row = toRealRow(displayRow)
       const colName = columns[col]?.name
       const val = rows[row]?.[colName]
       const str = val == null ? '' : String(val).trim()
@@ -264,8 +332,17 @@ export function SpreadsheetGrid({
         window.open(str, '_blank', 'noopener,noreferrer')
       }
     },
-    [columns, rows],
+    [columns, rows, toRealRow],
   )
+
+  const applyColumnFilter = useCallback((colKey: string, allowed: Set<string> | null) => {
+    setColumnFilters((prev) => {
+      const next = { ...prev }
+      if (allowed === null) delete next[colKey]
+      else next[colKey] = allowed
+      return next
+    })
+  }, [])
 
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden">
@@ -273,12 +350,13 @@ export function SpreadsheetGrid({
         width={dimensions.width}
         height={dimensions.height}
         columns={gridColumns}
-        rows={rows.length + rowBuffer}
+        rows={displayRowCount + rowBuffer}
         getCellContent={getCellContent}
         onCellEdited={onCellEditedHandler}
         onCellClicked={onCellClicked}
         onVisibleRegionChanged={onVisibleRegionChanged}
         onColumnResize={onColumnResize}
+        onHeaderMenuClick={onHeaderMenuClick}
         rowMarkers="number"
         smoothScrollX
         smoothScrollY
@@ -293,6 +371,18 @@ export function SpreadsheetGrid({
         getCellsForSelection
         copyHeaders
       />
+
+      {filterPopover && (
+        <ColumnFilterPopover
+          colKey={filterPopover.colKey}
+          values={uniqueValuesFor(filterPopover.colKey)}
+          selected={columnFilters[filterPopover.colKey] ?? null}
+          x={filterPopover.x}
+          y={filterPopover.y}
+          onApply={(allowed) => applyColumnFilter(filterPopover.colKey, allowed)}
+          onClose={() => setFilterPopover(null)}
+        />
+      )}
     </div>
   )
 }

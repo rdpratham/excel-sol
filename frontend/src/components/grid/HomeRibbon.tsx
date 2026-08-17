@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formattingApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { getSelectedCellRefs, getSelectedColumnKeys } from '@/lib/cellFormat'
 import { toast } from '@/hooks/useToast'
 import type { ApiError, CellAlign, CellStylePatch, NumberFormat, SheetColumn } from '@/types'
@@ -31,6 +32,10 @@ interface HomeRibbonProps {
   onCellStyleApplied: (cells: { row_index: number; col_key: string }[], patch: CellStylePatch) => void
   onColumnFormatApplied: (colKey: string, patch: { format?: NumberFormat; align?: CellAlign }) => void
   onColumnsMutated: () => void
+  // A column filter can make the grid's display non-contiguous in real row
+  // indices, which breaks range-based per-cell actions (they'd assume
+  // display position === row index) — disable just those while filtered.
+  disableCellActions?: boolean
 }
 
 const btnClass = 'flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-accent cursor-pointer'
@@ -49,11 +54,16 @@ export function HomeRibbon({
   onCellStyleApplied,
   onColumnFormatApplied,
   onColumnsMutated,
+  disableCellActions = false,
 }: HomeRibbonProps) {
   const [showInsertInput, setShowInsertInput] = useState(false)
   const [newColName, setNewColName] = useState('')
 
   const applyCellStyle = async (patch: CellStylePatch) => {
+    if (disableCellActions) {
+      toast({ title: 'Clear the column filter first', description: 'Per-cell formatting is disabled while a filter is active.' })
+      return
+    }
     const refs = getSelectedCellRefs(selection, columns, rowCount)
     if (refs.length === 0) {
       toast({ title: 'Select a cell or range first' })
@@ -117,7 +127,7 @@ export function HomeRibbon({
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/30 px-3 py-1.5">
       {/* Font */}
-      <div className="flex items-center gap-0.5">
+      <div className={cn('flex items-center gap-0.5', disableCellActions && 'pointer-events-none opacity-40')}>
         <button className={btnClass} title="Bold" onClick={() => applyCellStyle({ bold: true })}>
           <Bold className="h-3.5 w-3.5" />
         </button>
@@ -152,7 +162,10 @@ export function HomeRibbon({
       <div className="h-4 w-px bg-border" />
 
       {/* Alignment */}
-      <div className="flex items-center gap-0.5">
+      <div
+        className={cn('flex items-center gap-0.5', disableCellActions && 'pointer-events-none opacity-40')}
+        title={disableCellActions ? 'Clear the column filter to use alignment' : undefined}
+      >
         <button className={btnClass} title="Align left" onClick={() => applyAlign('left')}>
           <AlignLeft className="h-3.5 w-3.5" />
         </button>
