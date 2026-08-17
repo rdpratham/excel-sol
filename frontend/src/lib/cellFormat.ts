@@ -28,6 +28,18 @@ export function cellStyleKey(rowIndex: number, colKey: string): string {
   return `${rowIndex}:${colKey}`
 }
 
+/** 0 -> "A", 25 -> "Z", 26 -> "AA" — standard spreadsheet column lettering,
+ *  used for the blank trailing columns beyond the sheet's real data. */
+export function colIndexToLetters(index: number): string {
+  let n = index
+  let out = ''
+  do {
+    out = String.fromCharCode(65 + (n % 26)) + out
+    n = Math.floor(n / 26) - 1
+  } while (n >= 0)
+  return out
+}
+
 /** Columns touched by the current selection — whole-column selection or a range spanning columns. */
 export function getSelectedColumnKeys(selection: GridSelection, columns: SheetColumn[]): string[] {
   const keys = new Set<string>()

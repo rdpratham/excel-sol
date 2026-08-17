@@ -138,6 +138,13 @@ export const rowsApi = {
   deleteRows: (fileId: string, sheetId: string, rowIndexes: number[]) =>
     api.delete(`/files/${fileId}/sheets/${sheetId}/rows`, { data: { row_indexes: rowIndexes } }),
 
+  // Materializes blank rows up to targetRowCount in one call — backs editing
+  // a blank cell far below the current data, Excel-style.
+  ensureRows: (fileId: string, sheetId: string, targetRowCount: number) =>
+    api.post<{ row_count: number }>(`/files/${fileId}/sheets/${sheetId}/rows/ensure`, {
+      target_row_count: targetRowCount,
+    }),
+
   exportUrl: (fileId: string, sheetId: string) =>
     `${api.defaults.baseURL}/files/${fileId}/sheets/${sheetId}/export`,
 }

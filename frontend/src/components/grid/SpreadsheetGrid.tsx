@@ -4,6 +4,7 @@ import DataEditor, {
   type EditableGridCell,
   type GridCell,
   type GridColumn,
+  type Rectangle,
   type Theme,
   GridCellKind,
   type Item,
@@ -11,7 +12,7 @@ import DataEditor, {
   type GridSelection,
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
-import { cellStyleKey, effectiveAlign, formatDisplayValue } from '@/lib/cellFormat'
+import { cellStyleKey, colIndexToLetters, effectiveAlign, formatDisplayValue } from '@/lib/cellFormat'
 import type { CellStyle, SheetColumn } from '@/types'
 
 export interface GridRow {
@@ -23,11 +24,20 @@ interface SpreadsheetGridProps {
   rows: GridRow[]
   totalRows: number
   cellStyles?: Record<string, CellStyle>
-  onCellEdited: (rowIndex: number, colKey: string, value: unknown) => void
+  // isNewColumn=true means colKey is a generated letter name (e.g. "C") for
+  // a column that doesn't exist yet — the caller must create it first.
+  onCellEdited: (rowIndex: number, colKey: string, value: unknown, isNewColumn?: boolean) => void
   onSelectionChange?: (selectedRows: number[]) => void
   onFullSelectionChange?: (selection: GridSelection) => void
   isLoading?: boolean
 }
+
+// Blank trailing rows/columns rendered beyond the real data, Excel-style —
+// grown further as the user scrolls near the edge (see onVisibleRegionChanged).
+const INITIAL_ROW_BUFFER = 60
+const INITIAL_COL_BUFFER = 10
+const BUFFER_GROWTH = 60
+const GROWTH_THRESHOLD = 15
 
 const DARK_THEME = {
   accentColor: '#3b82f6',
@@ -103,6 +113,22 @@ export function SpreadsheetGrid({
     rows: CompactSelection.empty(),
     current: undefined,
   })
+  const [rowBuffer, setRowBuffer] = useState(INITIAL_ROW_BUFFER)
+  const [colBuffer, setColBuffer] = useState(INITIAL_COL_BUFFER)
+
+  // Grow the blank buffer as the user scrolls toward its edge, so it feels
+  // like an unbounded canvas rather than a fixed-size padded table.
+  const onVisibleRegionChanged = useCallback(
+    (range: Rectangle) => {
+      if (range.y + range.height >= rows.length + rowBuffer - GROWTH_THRESHOLD) {
+        setRowBuffer((n) => n + BUFFER_GROWTH)
+      }
+      if (range.x + range.width >= columns.length + colBuffer - GROWTH_THRESHOLD) {
+        setColBuffer((n) => n + BUFFER_GROWTH)
+      }
+    },
+    [rows.length, columns.length, rowBuffer, colBuffer],
+  )
 
   // Detect dark mode
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
@@ -134,27 +160,47 @@ export function SpreadsheetGrid({
     onFullSelectionChange?.(selection)
   }, [selection, onFullSelectionChange])
 
-  const gridColumns: GridColumn[] = useMemo(
-    () =>
-      columns.map((col) => ({
-        title: col.name,
-        id: col.name,
-        width: col.width ?? 150,
-        grow: col.index === columns.length - 1 ? 1 : undefined,
-      })),
-    [columns],
-  )
+  const gridColumns: GridColumn[] = useMemo(() => {
+    const real = columns.map((col) => ({
+      title: col.name,
+      id: col.name,
+      width: col.width ?? 150,
+    }))
+    const phantomCount = Math.max(colBuffer, 1)
+    const phantom = Array.from({ length: phantomCount }, (_, i) => {
+      const absoluteIndex = columns.length + i
+      return {
+        title: colIndexToLetters(absoluteIndex),
+        id: `__phantom_col_${absoluteIndex}`,
+        width: 120,
+        grow: i === phantomCount - 1 ? 1 : undefined,
+      }
+    })
+    return [...real, ...phantom]
+  }, [columns, colBuffer])
 
   const getCellContent = useCallback(
     ([col, row]: Item): GridCell => {
       const column = columns[col]
-      const colName = column?.name
+
+      if (!column) {
+        // Blank trailing column beyond the real data
+        return {
+          kind: GridCellKind.Text,
+          data: '',
+          displayData: '',
+          allowOverlay: true,
+          readonly: false,
+        }
+      }
+
+      const colName = column.name
       const rowData = rows[row]
       const val = rowData?.[colName] ?? ''
       const strVal = val == null ? '' : String(val)
 
       const style = cellStyles[cellStyleKey(row, colName)]
-      const displayData = formatDisplayValue(val, column?.format)
+      const displayData = formatDisplayValue(val, column.format)
       const align = effectiveAlign(style, column)
 
       const themeOverride: Partial<Theme> | undefined =
@@ -183,10 +229,15 @@ export function SpreadsheetGrid({
 
   const onCellEditedHandler = useCallback(
     ([col, row]: Item, newVal: EditableGridCell) => {
-      const colName = columns[col]?.name
-      if (!colName) return
       const value = newVal.kind === GridCellKind.Text ? newVal.data : String((newVal as { data: unknown }).data)
-      onCellEdited(row, colName, value)
+      const column = columns[col]
+      if (column) {
+        onCellEdited(row, column.name, value)
+      } else {
+        // Blank column beyond the real data — materialize it with its
+        // spreadsheet-letter name, matching what the header already shows.
+        onCellEdited(row, colIndexToLetters(col), value, true)
+      }
     },
     [columns, onCellEdited],
   )
@@ -206,18 +257,17 @@ export function SpreadsheetGrid({
     [columns, rows],
   )
 
-  if (columns.length === 0) return null
-
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden">
       <DataEditor
         width={dimensions.width}
         height={dimensions.height}
         columns={gridColumns}
-        rows={rows.length}
+        rows={rows.length + rowBuffer}
         getCellContent={getCellContent}
         onCellEdited={onCellEditedHandler}
         onCellClicked={onCellClicked}
+        onVisibleRegionChanged={onVisibleRegionChanged}
         rowMarkers="number"
         smoothScrollX
         smoothScrollY

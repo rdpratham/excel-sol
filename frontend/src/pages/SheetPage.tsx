@@ -17,7 +17,7 @@ import { SpreadsheetGrid, type GridRow } from '@/components/grid/SpreadsheetGrid
 import { PresenceBar } from '@/components/grid/PresenceBar'
 import { HomeRibbon } from '@/components/grid/HomeRibbon'
 import { ChatPanel } from '@/components/chat/ChatPanel'
-import { filesApi, rowsApi } from '@/lib/api'
+import { filesApi, formattingApi, rowsApi } from '@/lib/api'
 import { mergeCellStylePatch } from '@/lib/cellFormat'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -151,9 +151,19 @@ export function SheetPage() {
     onColumnsChanged: handleRemoteColumnsChanged,
   })
 
+  // Names currently being created via addColumn — guards against firing a
+  // second create for the same phantom column before the first resolves
+  // (e.g. typing into two cells of a brand-new column in quick succession).
+  const pendingNewColumns = useRef<Set<string>>(new Set())
+
   // ── Cell edit — instant local update + debounced save ─────────────────────
+  // isNewColumn=true means colKey is a generated letter name for a blank
+  // column beyond the real data (see SpreadsheetGrid) — it must be created
+  // server-side before anything can be saved into it. Likewise, editing a
+  // blank row beyond the current row count must materialize rows up to it
+  // first (see rowsApi.ensureRows) since the PATCH endpoint 404s otherwise.
   const handleCellEdited = useCallback(
-    (rowIndex: number, colKey: string, newValue: unknown) => {
+    (rowIndex: number, colKey: string, newValue: unknown, isNewColumn?: boolean) => {
       setLocalRows((prev) => {
         const oldValue = prev[rowIndex]?.[colKey]
         // Push to undo stack
@@ -165,14 +175,41 @@ export function SheetPage() {
         return next
       })
 
-      // Queue debounced save (500ms)
-      const key = `${rowIndex}:${colKey}`
-      pendingSaves.current.set(key, { rowIndex, col_key: colKey, value: newValue })
+      const materializeAndSave = async () => {
+        if (!fileId || !sheetId) return
 
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-      saveTimer.current = setTimeout(flushSaves, 500)
+        if (isNewColumn && !pendingNewColumns.current.has(colKey)) {
+          pendingNewColumns.current.add(colKey)
+          try {
+            const { data } = await formattingApi.addColumn(fileId, sheetId, colKey)
+            setColumnsState(data.columns)
+          } catch {
+            toast({ variant: 'destructive', title: `Failed to create column "${colKey}"` })
+            return
+          } finally {
+            pendingNewColumns.current.delete(colKey)
+          }
+        }
+
+        if (rowIndex >= totalRows) {
+          try {
+            const { data } = await rowsApi.ensureRows(fileId, sheetId, rowIndex + 1)
+            setTotalRows((n) => Math.max(n, data.row_count))
+          } catch {
+            toast({ variant: 'destructive', title: 'Failed to create row' })
+            return
+          }
+        }
+
+        const key = `${rowIndex}:${colKey}`
+        pendingSaves.current.set(key, { rowIndex, col_key: colKey, value: newValue })
+        if (saveTimer.current) clearTimeout(saveTimer.current)
+        saveTimer.current = setTimeout(flushSaves, 500)
+      }
+
+      materializeAndSave()
     },
-    [],
+    [fileId, sheetId, totalRows],
   )
 
   const flushSaves = useCallback(async () => {
@@ -390,10 +427,6 @@ export function SheetPage() {
             {isLoading ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : columns.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                This sheet is empty
               </div>
             ) : (
               <SpreadsheetGrid

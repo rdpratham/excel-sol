@@ -159,6 +159,54 @@ async def append_row(
     return {"row_index": new_index, "data": body.data}
 
 
+# ── POST /files/{file_id}/sheets/{sheet_id}/rows/ensure ───────────────────────
+
+
+MAX_ENSURE_ROWS_PER_CALL = 2000
+
+
+class EnsureRowsRequest(BaseModel):
+    target_row_count: int
+
+
+@router.post("/files/{file_id}/sheets/{sheet_id}/rows/ensure", status_code=200)
+async def ensure_rows(
+    file_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    body: EnsureRowsRequest,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Materialize blank rows up to target_row_count in one round-trip.
+
+    Backs the Excel-like "click on an empty cell far below your data and
+    just start typing" flow — the grid shows a generous blank buffer beyond
+    the real rows, and this bulk-inserts whatever's missing in a single
+    statement rather than one append call per row.
+    """
+    _, sheet = await _get_file_and_sheet(file_id, sheet_id, user.id, db)
+
+    if body.target_row_count <= sheet.row_count:
+        return {"row_count": sheet.row_count}
+
+    target = min(body.target_row_count, sheet.row_count + MAX_ENSURE_ROWS_PER_CALL)
+    added = target - sheet.row_count
+
+    db.add_all(
+        SheetRow(sheet_id=sheet_id, row_index=i, data={})
+        for i in range(sheet.row_count, target)
+    )
+    await db.execute(update(Sheet).where(Sheet.id == sheet_id).values(row_count=target))
+    await db.execute(update(File).where(File.id == file_id).values(total_rows=File.total_rows + added))
+    await db.commit()
+
+    await manager.publish(str(sheet_id), {
+        "type": "row_added", "row_index": target - 1, "user_id": str(user.id),
+    })
+
+    return {"row_count": target}
+
+
 # ── DELETE /files/{file_id}/sheets/{sheet_id}/rows ────────────────────────────
 
 
