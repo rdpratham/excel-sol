@@ -19,6 +19,7 @@ import { HomeRibbon } from '@/components/grid/HomeRibbon'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { filesApi, rowsApi } from '@/lib/api'
 import { mergeCellStylePatch } from '@/lib/cellFormat'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useSheetSocket } from '@/hooks/useSheetSocket'
 import { toast } from '@/hooks/useToast'
@@ -426,6 +427,26 @@ export function SheetPage() {
                 Next
               </Button>
             </div>
+          </div>
+        )}
+
+        {/* ── Sheet tabs — switch between sheets in this file, Excel-style ── */}
+        {file && file.sheets.length > 0 && (
+          <div className="flex items-center gap-0.5 overflow-x-auto border-t border-border bg-muted/30 px-2 py-1">
+            {file.sheets.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => navigate(`/files/${file.id}/sheets/${s.id}`)}
+                className={cn(
+                  'shrink-0 rounded-t px-3 py-1 text-xs font-medium transition-colors',
+                  s.id === sheetId
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                )}
+              >
+                {s.name}
+              </button>
+            ))}
           </div>
         )}
       </div>

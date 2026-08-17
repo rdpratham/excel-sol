@@ -222,6 +222,8 @@ export function SpreadsheetGrid({
         smoothScrollX
         smoothScrollY
         keybindings={{ search: true }}
+        editOnType
+        cellActivationBehavior="double-click"
         gridSelection={selection}
         onGridSelectionChange={setSelection}
         theme={isDark ? DARK_THEME : LIGHT_THEME}
