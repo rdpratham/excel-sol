@@ -167,6 +167,8 @@ async def classify(question: str, columns_meta: list[dict]) -> AISelectPlan | AI
     except httpx.HTTPError:
         raise AIQueryError("Couldn't reach the AI service — please try again.")
 
+    if resp.status_code == 429:
+        raise AIQueryError("The AI is rate-limited right now (free tier) — please wait a few seconds and try again.")
     if resp.status_code != 200:
         raise AIQueryError(f"AI request failed (HTTP {resp.status_code}).")
 

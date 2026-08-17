@@ -52,8 +52,10 @@ router = APIRouter(tags=["query"])
 
 MAX_WRITE_ROWS = 5000
 PENDING_TTL_SECONDS = 120
+UNDO_TTL_SECONDS = 600
 CONFIRM_WORDS = {"yes", "y", "confirm", "confirmed", "proceed", "do it", "go ahead", "ok", "okay", "sure", "yep"}
 CANCEL_WORDS = {"no", "n", "cancel", "stop", "nevermind", "never mind", "don't"}
+UNDO_WORDS = {"undo", "undo that", "undo it", "revert", "revert that", "revert it"}
 
 
 class QueryRequest(BaseModel):
@@ -114,6 +116,10 @@ def _fmt(v: Any) -> str:
 
 def _pending_key(user_id: uuid.UUID, sheet_id: uuid.UUID) -> str:
     return f"pending_write:{user_id}:{sheet_id}"
+
+
+def _last_write_key(user_id: uuid.UUID, sheet_id: uuid.UUID) -> str:
+    return f"last_write:{user_id}:{sheet_id}"
 
 
 def _filters_to_json(filters: list[Filter]) -> list[dict]:
@@ -196,6 +202,7 @@ async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan:
     sheet_rows = rows_result.scalars().all()
 
     changed: list[SheetRow] = []
+    undo_batch: list[dict] = []
     for sr in sheet_rows:
         if not matches_filters(sr.data, filters):
             continue
@@ -211,11 +218,13 @@ async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan:
             old_value={"v": old_value}, new_value={"v": new_value}, user_id=user.id,
         ))
         changed.append(sr)
+        undo_batch.append({"row_id": str(sr.id), "column": column, "old_value": old_value})
 
     if not changed:
         return "Nothing changed — those rows already have that value."
 
     await db.commit()
+    await redis_client.set(_last_write_key(user.id, sheet_id), json.dumps(undo_batch), ex=UNDO_TTL_SECONDS)
 
     for sr in changed:
         await manager.publish(str(sheet_id), {
@@ -225,7 +234,65 @@ async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan:
             "user_id": str(user.id),
         })
 
-    return f'Done — updated "{column}" to {_fmt(new_value)} for {len(changed)} row{"s" if len(changed) != 1 else ""}.'
+    return (
+        f'Done — updated "{column}" to {_fmt(new_value)} for {len(changed)} row{"s" if len(changed) != 1 else ""}. '
+        'Reply "undo" if you want to revert this.'
+    )
+
+
+async def _handle_undo(db: AsyncSession, user: User, file_id: uuid.UUID, sheet_id: uuid.UUID) -> QueryResponse:
+    if user.role not in (UserRole.admin, UserRole.editor):
+        return await _log_and_respond(db, user, file_id, sheet_id, "You don't have permission to edit this sheet.")
+
+    key = _last_write_key(user.id, sheet_id)
+    raw = await redis_client.get(key)
+    if not raw:
+        return await _log_and_respond(db, user, file_id, sheet_id, "There's nothing to undo.")
+
+    await redis_client.delete(key)
+    batch = json.loads(raw)
+
+    row_ids = [uuid.UUID(entry["row_id"]) for entry in batch]
+    rows_result = await db.execute(select(SheetRow).where(SheetRow.id.in_(row_ids)))
+    rows_by_id = {sr.id: sr for sr in rows_result.scalars().all()}
+
+    reverted: list[tuple[SheetRow, str, Any]] = []
+    for entry in batch:
+        sr = rows_by_id.get(uuid.UUID(entry["row_id"]))
+        if sr is None:
+            continue
+        column = entry["column"]
+        old_value = entry["old_value"]
+        current_value = sr.data.get(column)
+        new_data = dict(sr.data)
+        new_data[column] = old_value
+        sr.data = new_data
+        sr.updated_by = user.id
+        db.add(CellEdit(
+            sheet_id=sheet_id, row_index=sr.row_index, col_key=column,
+            old_value={"v": current_value}, new_value={"v": old_value}, user_id=user.id,
+        ))
+        reverted.append((sr, column, old_value))
+
+    if not reverted:
+        return await _log_and_respond(db, user, file_id, sheet_id, "Couldn't undo — those rows no longer exist.")
+
+    await db.commit()
+
+    for sr, column, old_value in reverted:
+        await manager.publish(str(sheet_id), {
+            "type": "cell_edit",
+            "row_index": sr.row_index,
+            "cells": [{"col_key": column, "value": old_value}],
+            "user_id": str(user.id),
+        })
+
+    column_name = reverted[0][1]
+    return await _log_and_respond(
+        db, user, file_id, sheet_id,
+        f'Undone — reverted "{column_name}" back to its previous value for '
+        f'{len(reverted)} row{"s" if len(reverted) != 1 else ""}.',
+    )
 
 
 @router.post("/files/{file_id}/sheets/{sheet_id}/query", response_model=QueryResponse)
@@ -245,6 +312,10 @@ async def query_sheet(
     text = body.query.strip()
     lowered = text.lower()
     pending_key = _pending_key(user.id, sheet_id)
+
+    # Reverting the last committed write (independent of any pending preview)
+    if lowered in UNDO_WORDS:
+        return await _handle_undo(db, user, file_id, sheet_id)
 
     # Confirming or cancelling a previously-previewed write
     if lowered in CONFIRM_WORDS:
