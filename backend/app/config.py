@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     # Observability
     SENTRY_DSN: Optional[str] = None
 
+    # One-time admin bootstrap — set both to auto-create an admin user on
+    # startup if no user with this email exists yet (skip otherwise). For
+    # environments with no shell access (e.g. Render's free tier) where
+    # there's no other way to create the first account. Unset both env
+    # vars once you've logged in.
+    BOOTSTRAP_ADMIN_EMAIL: Optional[str] = None
+    BOOTSTRAP_ADMIN_PASSWORD: Optional[str] = None
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"

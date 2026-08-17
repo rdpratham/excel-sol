@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import router as api_v1_router
 from app.api.v1.ws import router as ws_router
 from app.config import settings
+from app.core.bootstrap import bootstrap_admin_user
 from app.core.logging import RequestLoggingMiddleware, setup_logging
 
 log = structlog.get_logger()
@@ -22,6 +23,8 @@ async def lifespan(app: FastAPI):
     if settings.SENTRY_DSN:
         import sentry_sdk
         sentry_sdk.init(dsn=settings.SENTRY_DSN, environment=settings.ENVIRONMENT)
+
+    await bootstrap_admin_user()
 
     yield
     log.info("mindspread_stopping")

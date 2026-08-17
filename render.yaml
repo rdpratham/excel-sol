@@ -38,6 +38,12 @@ services:
         value: "3.12.0"
       - key: SENTRY_DSN
         sync: false
+      # Set both to auto-create the first admin user on startup (no shell
+      # access needed on the free tier). Unset both once you've logged in.
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
 
   # ── Frontend static site ─────────────────────────────────────────────────────
   - type: web
