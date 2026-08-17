@@ -37,6 +37,7 @@ _INCREASE_BY_RE = re.compile(
 _DECREASE_BY_RE = re.compile(
     r"^decrease\s+(.+?)\s+by\s+(\d+(?:\.\d+)?)\s*(%|percent)?(?:\s+where\s+(.+))?$", re.I
 )
+_DELETE_WHERE_RE = re.compile(r"^(?:delete|remove)\s+(?:rows?|records?)\s+where\s+(.+)$", re.I)
 
 # op: "set" — value is the literal to write.
 #     "increase_by" / "decrease_by" — value is added/subtracted from the
@@ -52,6 +53,11 @@ class WriteIntent:
     filters: list[Filter]
     value: Any
     op: str = "set"
+
+
+@dataclass
+class DeleteIntent:
+    filters: list[Filter]
 
 
 def matches_filters(row_data: dict, filters: list[Filter]) -> bool:
@@ -186,5 +192,20 @@ def parse_write_intent(text: str, columns: list[str]) -> WriteIntent | None:
         filters = _parse_filters(where_phrase, columns)
         op = "decrease_by_percent" if pct else "decrease_by"
         return WriteIntent(column=column, filters=filters, value=float(amount), op=op)
+
+    return None
+
+
+def parse_delete_intent(text: str, columns: list[str]) -> DeleteIntent | None:
+    """Returns a DeleteIntent for "delete/remove rows where ..." phrasings,
+    or None if the text doesn't match — same never-guess contract as
+    parse_write_intent."""
+    q = text.strip()
+    if not q:
+        return None
+
+    m = _DELETE_WHERE_RE.match(q)
+    if m:
+        return DeleteIntent(filters=_parse_filters(m.group(1), columns))
 
     return None

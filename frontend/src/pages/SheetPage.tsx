@@ -148,6 +148,7 @@ export function SheetPage() {
     onCellEdit: handleRemoteCellEdit,
     onRowAdded: handleRemoteRowsChanged,
     onRowsDeleted: handleRemoteRowsChanged,
+    onRowsReordered: handleRemoteRowsChanged,
     onCellStyle: handleRemoteCellStyle,
     onColumnFormat: handleRemoteColumnFormat,
     onColumnsChanged: handleRemoteColumnsChanged,

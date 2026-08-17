@@ -60,6 +60,25 @@ class AIWritePlan:
     op: str = "set"
 
 
+@dataclass
+class AIReorderPlan:
+    column: str
+    priority_values: list[str]
+    message: str
+
+
+@dataclass
+class AIDeletePlan:
+    filters: list[Filter]
+    message: str
+
+
+@dataclass
+class AIAddRowPlan:
+    data: dict[str, Any]
+    message: str
+
+
 def is_available() -> bool:
     return bool(settings.OPENROUTER_API_KEY)
 
@@ -70,9 +89,14 @@ def _build_prompt(question: str, columns_meta: list[dict]) -> str:
         'You are a data assistant. There is exactly one table available, named "sheet", '
         f"with these columns: {schema_desc}.\n\n"
         f'User message: "{question}"\n\n'
-        "First decide whether this is a READ request (asking for information about the "
-        'data) or a WRITE request (asking to change, update, set, or replace data in the '
-        "sheet).\n\n"
+        "First decide which one of these five intents the message is:\n"
+        "  read — asking for information about the data\n"
+        "  write — asking to change, update, set, or replace values already in the sheet\n"
+        '  reorder — asking to physically move/rearrange rows (e.g. "put C-suite people at '
+        'the top, then Directors") based on which group a row belongs to, not a plain '
+        "ascending/descending sort\n"
+        "  delete — asking to remove rows that match some condition\n"
+        "  add_row — asking to add a brand-new row with specific values\n\n"
         "Respond with ONLY a raw JSON object (no markdown fences, no extra text).\n\n"
         'If it is a READ request, use exactly these keys:\n'
         '  "intent": "read"\n'
@@ -95,12 +119,37 @@ def _build_prompt(question: str, columns_meta: list[dict]) -> str:
         '  "message": a short, friendly, one-sentence description of the change, e.g. '
         '\'Setting "Company" to "XYZ" for rows where Company is "Afresh".\' or '
         '\'Increasing "Salary" by 10% for rows where Role is "C-suite".\'\n\n'
-        "Never invent a column name that isn't in the list above. Never respond with SQL "
-        "for a write request — writes are always column/filters/write_op/value, never raw "
-        "SQL. If the request describes different changes for different groups of rows (e.g. "
-        '"give C-suite a 10% raise and everyone else 5%"), only describe ONE of the two '
-        "groups in this reply and say in \"message\" that the other group needs a separate "
-        "follow-up command — never invent a way to encode two different amounts in one plan."
+        'If it is a REORDER request, use exactly these keys:\n'
+        '  "intent": "reorder"\n'
+        '  "column": the exact column name whose values determine the grouping (must be one '
+        "of the columns listed above)\n"
+        '  "priority_values": an ordered list of that column\'s values, from what should '
+        'appear at the top to what comes next (e.g. ["C-suite", "Director"]); rows whose '
+        "value isn't in this list keep their current relative order and are placed after "
+        "every listed group\n"
+        '  "message": a short, friendly, one-sentence description, e.g. \'Moving rows where '
+        'Role is "C-suite" to the top, then "Director".\'\n\n'
+        'If it is a DELETE request, use exactly these keys:\n'
+        '  "intent": "delete"\n'
+        '  "filters": a non-empty list of {"column", "op", "value"} objects describing which '
+        "rows to delete (op is one of =, !=, >, <, >=, <=) — always require at least one real "
+        "filter; if the user's message doesn't give you one, set \"filters\" to an empty list "
+        'and use "message" to ask them which rows they mean instead of guessing\n'
+        '  "message": a short, friendly, one-sentence description, e.g. \'Deleting rows where '
+        'Status is "Cancelled".\'\n\n'
+        'If it is an ADD_ROW request, use exactly these keys:\n'
+        '  "intent": "add_row"\n'
+        '  "data": an object mapping column name to value for the new row (only use column '
+        "names from the list above; omit columns the user didn't specify a value for)\n"
+        '  "message": a short, friendly, one-sentence description, e.g. \'Adding a new row '
+        "with Name \\\"Jane\\\" and Status \\\"Active\\\".'\n\n"
+        "Never invent a column name that isn't in the list above. Never respond with SQL for "
+        "a write, reorder, delete, or add_row request — those are always expressed with the "
+        "structured fields described above, never raw SQL. If the request describes different "
+        'changes for different groups of rows (e.g. "give C-suite a 10% raise and everyone '
+        'else 5%"), only describe ONE of the two groups in this reply and say in "message" '
+        "that the other group needs a separate follow-up command — never invent a way to "
+        "encode two different amounts in one plan."
     )
 
 
@@ -162,10 +211,70 @@ def _validate_write(parsed: dict, column_names: list[str]) -> AIWritePlan:
     return AIWritePlan(column=column, filters=filters, value=value, message=message, op=write_op)
 
 
-async def classify(question: str, columns_meta: list[dict]) -> AISelectPlan | AIWritePlan:
-    """Sends the message to the LLM and returns either a read plan (SQL to
-    run) or a write plan (structured column/filters/new_value, never raw
-    SQL). Raises AIQueryError if unavailable, unparseable, or unsafe."""
+def _validate_reorder(parsed: dict, column_names: list[str]) -> AIReorderPlan:
+    message = parsed.get("message") or "Here's how I'd reorder the rows."
+
+    col_raw = parsed.get("column")
+    if not col_raw:
+        raise AIQueryError(message)
+    try:
+        column = _resolve_column(str(col_raw), column_names)
+    except QueryParseError as e:
+        raise AIQueryError(str(e))
+
+    priority_values = [str(v) for v in (parsed.get("priority_values") or []) if v is not None]
+    if not priority_values:
+        raise AIQueryError("The AI didn't say which values should come first — try rephrasing.")
+
+    return AIReorderPlan(column=column, priority_values=priority_values, message=message)
+
+
+def _validate_delete(parsed: dict, column_names: list[str]) -> AIDeletePlan:
+    message = parsed.get("message") or "Here's what I'd delete."
+
+    filters: list[Filter] = []
+    for raw_filter in parsed.get("filters") or []:
+        if not isinstance(raw_filter, dict) or not raw_filter.get("column"):
+            continue
+        try:
+            filter_col = _resolve_column(str(raw_filter["column"]), column_names)
+        except QueryParseError as e:
+            raise AIQueryError(str(e))
+        op = raw_filter.get("op") if raw_filter.get("op") in _VALID_OPS else "="
+        filters.append(Filter(filter_col, op, raw_filter.get("value")))
+
+    if not filters:
+        raise AIQueryError(message)
+
+    return AIDeletePlan(filters=filters, message=message)
+
+
+def _validate_add_row(parsed: dict, column_names: list[str]) -> AIAddRowPlan:
+    message = parsed.get("message") or "Here's the row I'd add."
+
+    raw_data = parsed.get("data")
+    if not isinstance(raw_data, dict) or not raw_data:
+        raise AIQueryError(message)
+
+    data: dict[str, Any] = {}
+    for col_raw, value in raw_data.items():
+        try:
+            column = _resolve_column(str(col_raw), column_names)
+        except QueryParseError as e:
+            raise AIQueryError(str(e))
+        data[column] = value
+
+    return AIAddRowPlan(data=data, message=message)
+
+
+async def classify(
+    question: str, columns_meta: list[dict]
+) -> AISelectPlan | AIWritePlan | AIReorderPlan | AIDeletePlan | AIAddRowPlan:
+    """Sends the message to the LLM and returns a read plan (SQL to run), a
+    write plan (column/filters/op/value), a reorder plan
+    (column/priority_values), a delete plan (filters), or an add_row plan
+    (data) — never raw SQL for a mutation. Raises AIQueryError if
+    unavailable, unparseable, or unsafe."""
     if not settings.OPENROUTER_API_KEY:
         raise AIQueryError("AI query isn't configured for this deployment.")
 
@@ -196,6 +305,13 @@ async def classify(question: str, columns_meta: list[dict]) -> AISelectPlan | AI
         raise AIQueryError("AI returned an unexpected response.")
 
     parsed = _extract_json(text)
-    if parsed.get("intent") == "write":
+    intent = parsed.get("intent")
+    if intent == "write":
         return _validate_write(parsed, column_names)
+    if intent == "reorder":
+        return _validate_reorder(parsed, column_names)
+    if intent == "delete":
+        return _validate_delete(parsed, column_names)
+    if intent == "add_row":
+        return _validate_add_row(parsed, column_names)
     return _validate_read(parsed)

@@ -4,27 +4,33 @@ Plain-language querying — and now editing — over a sheet's data.
   POST /files/{file_id}/sheets/{sheet_id}/query          — ask or tell the bot something
   GET  /files/{file_id}/sheets/{sheet_id}/query/history   — past Q&A for this sheet
 
-Two-tier engine for both reads and writes: nlq.py / write_intent.py
-pattern-match a fixed grammar of common phrasings ("average price by
-category", "change status from Pending to Active where region is East")
-with zero latency and zero external calls. When a message doesn't match
-either grammar and OPENROUTER_API_KEY is configured, it falls back to
-ai_query.py, which asks a free-tier LLM (via OpenRouter) to classify the
-message as a read (translated to a SELECT, run through the sandboxed
-DuckDB engine — see query_runner.run_raw_sql) or a write (translated to a
-structured column/filters/op/value plan — op covers a literal "set" as
-well as relative "increase/decrease by N or N%" — re-validated against the
-real schema; the model never gets to write raw mutation SQL).
+Two-tier engine covering five kinds of request: read, write (set a literal
+or a relative increase/decrease), reorder (group rows by a column's
+values), delete, and add_row. nlq.py / write_intent.py pattern-match a
+fixed grammar of common phrasings for read/write/delete with zero latency
+and zero external calls. Anything that doesn't match — including reorder
+and add_row, which are inherently too free-form for a fixed grammar — goes
+to ai_query.classify() when OPENROUTER_API_KEY is configured: the LLM
+decides which of the five intents the message is and returns one
+structured plan (never raw mutation SQL) — a read gets a sandboxed SELECT
+(see query_runner.run_raw_sql); the other four get column/filter/value-
+shaped plans that this module re-validates against the sheet's real schema
+before ever touching data. Because the LLM is choosing the intent itself
+on every unmatched message, adding a genuinely new capability later means
+adding one more intent branch here and one more prompt section in
+ai_query.py — the model doesn't need retraining or a new regex family for
+every new phrasing of something already-supported.
 
-Writes are never applied immediately. Every write — rule-based or
-AI-classified — produces a preview ("this will change N rows...") that's
-stashed server-side in Redis, keyed by (user, sheet), for a short TTL. The
-user confirms by replying "yes" in the same chat, which is the only thing
-that actually commits the UPDATE, writes an audit CellEdit row per changed
-row, and broadcasts a `cell_edit` WS event per row so every connected
-client updates live — reusing the exact same real-time path row edits from
-the grid already go through. Only admins/editors may confirm a write;
-viewers get a permission message instead of a silent no-op.
+Every one of the four mutating kinds is previewed, never applied
+immediately: a plan is stashed server-side in Redis, keyed by (user,
+sheet), for a short TTL, and only committed when the user replies "yes" in
+the same chat. Commits write an audit CellEdit row per changed cell (or an
+equivalent snapshot for row add/delete/reorder) and broadcast a WS event
+so every connected client updates live — reusing the exact real-time path
+manual grid edits already go through, so no new frontend UI was needed.
+Every commit is undoable with a plain "undo" reply for a few minutes
+afterward. Only admins/editors may confirm a write or undo one; viewers
+get a permission message instead of a silent no-op.
 """
 
 import json
@@ -47,7 +53,7 @@ from app.models.user import User, UserRole
 from app.services import ai_query
 from app.services.nlq import Filter, ParsedQuery, QueryParseError, parse_query
 from app.services.query_runner import run_query, run_raw_sql
-from app.services.write_intent import apply_op, matches_filters, parse_write_intent
+from app.services.write_intent import apply_op, matches_filters, parse_delete_intent, parse_write_intent
 from app.ws.manager import manager
 
 router = APIRouter(tags=["query"])
@@ -210,9 +216,91 @@ async def _preview_write(
         'Reply "yes" to confirm, or say something else to cancel.'
     )
 
-    plan = {"column": column, "filters": _filters_to_json(filters), "value": value, "op": op}
+    plan = {"kind": "write", "column": column, "filters": _filters_to_json(filters), "value": value, "op": op}
     await redis_client.set(pending_key, json.dumps(plan), ex=PENDING_TTL_SECONDS)
     return await _log_and_respond(db, user, file_id, sheet_id, reply)
+
+
+async def _preview_reorder(
+    db: AsyncSession,
+    user: User,
+    file_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    total_rows: int,
+    column: str,
+    priority_values: list[str],
+    pending_key: str,
+) -> QueryResponse:
+    if user.role not in (UserRole.admin, UserRole.editor):
+        return await _log_and_respond(
+            db, user, file_id, sheet_id,
+            "You don't have permission to edit this sheet — ask an editor or admin.",
+        )
+
+    if total_rows > MAX_WRITE_ROWS:
+        return await _log_and_respond(
+            db, user, file_id, sheet_id,
+            f"This sheet has {total_rows} rows, which is more than I'll reorder in one go "
+            f"(limit {MAX_WRITE_ROWS}).",
+        )
+
+    groups_desc = ", then ".join(f'"{v}"' for v in priority_values)
+    reply = (
+        f'This will move rows where "{column}" is {groups_desc} to the top (in that order), '
+        "keeping everyone else in their current relative order below. "
+        'Reply "yes" to confirm, or say something else to cancel.'
+    )
+
+    plan = {"kind": "reorder", "column": column, "priority_values": priority_values}
+    await redis_client.set(pending_key, json.dumps(plan), ex=PENDING_TTL_SECONDS)
+    return await _log_and_respond(db, user, file_id, sheet_id, reply)
+
+
+def _reorder_rank(value: Any, priority_lookup: dict[str, int], fallback: int) -> int:
+    key = str(value).strip().lower() if value is not None else ""
+    return priority_lookup.get(key, fallback)
+
+
+async def _commit_reorder(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan: dict) -> str:
+    column = plan["column"]
+    priority_values: list[str] = plan["priority_values"]
+    priority_lookup = {v.strip().lower(): i for i, v in enumerate(priority_values)}
+    fallback_rank = len(priority_values)
+
+    rows_result = await db.execute(
+        select(SheetRow).where(SheetRow.sheet_id == sheet_id).order_by(SheetRow.row_index)
+    )
+    sheet_rows = rows_result.scalars().all()
+
+    original_order = [str(sr.id) for sr in sheet_rows]
+    reordered = sorted(
+        sheet_rows,
+        key=lambda sr: _reorder_rank(sr.data.get(column), priority_lookup, fallback_rank),
+    )
+
+    changed = 0
+    for new_index, sr in enumerate(reordered):
+        if sr.row_index != new_index:
+            sr.row_index = new_index
+            changed += 1
+
+    if not changed:
+        return "The rows are already in that order — nothing to change."
+
+    await db.commit()
+    await redis_client.set(
+        _last_write_key(user.id, sheet_id),
+        json.dumps({"kind": "reorder", "order": original_order}),
+        ex=UNDO_TTL_SECONDS,
+    )
+
+    await manager.publish(str(sheet_id), {"type": "rows_reordered", "user_id": str(user.id)})
+
+    groups_desc = ", then ".join(f'"{v}"' for v in priority_values)
+    return (
+        f'Done — moved rows where "{column}" is {groups_desc} to the top. '
+        'Reply "undo" if you want to revert this.'
+    )
 
 
 async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan: dict) -> str:
@@ -250,7 +338,11 @@ async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan:
         return "Nothing changed — those rows already have that value."
 
     await db.commit()
-    await redis_client.set(_last_write_key(user.id, sheet_id), json.dumps(undo_batch), ex=UNDO_TTL_SECONDS)
+    await redis_client.set(
+        _last_write_key(user.id, sheet_id),
+        json.dumps({"kind": "write", "entries": undo_batch}),
+        ex=UNDO_TTL_SECONDS,
+    )
 
     for sr in changed:
         await manager.publish(str(sheet_id), {
@@ -266,24 +358,157 @@ async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan:
     )
 
 
-async def _handle_undo(db: AsyncSession, user: User, file_id: uuid.UUID, sheet_id: uuid.UUID) -> QueryResponse:
+async def _preview_delete(
+    db: AsyncSession,
+    user: User,
+    file_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    rows: list[dict],
+    filters: list[Filter],
+    pending_key: str,
+) -> QueryResponse:
     if user.role not in (UserRole.admin, UserRole.editor):
-        return await _log_and_respond(db, user, file_id, sheet_id, "You don't have permission to edit this sheet.")
+        return await _log_and_respond(
+            db, user, file_id, sheet_id,
+            "You don't have permission to edit this sheet — ask an editor or admin.",
+        )
 
-    key = _last_write_key(user.id, sheet_id)
-    raw = await redis_client.get(key)
-    if not raw:
-        return await _log_and_respond(db, user, file_id, sheet_id, "There's nothing to undo.")
+    matched = [r for r in rows if matches_filters(r, filters)]
+    if not matched:
+        return await _log_and_respond(db, user, file_id, sheet_id, "No rows match that — nothing to delete.")
 
-    await redis_client.delete(key)
-    batch = json.loads(raw)
+    if len(matched) > MAX_WRITE_ROWS:
+        return await _log_and_respond(
+            db, user, file_id, sheet_id,
+            f"That would delete {len(matched)} rows, which is more than I'll do in one go "
+            f"(limit {MAX_WRITE_ROWS}). Try narrowing it down with a more specific filter.",
+        )
 
-    row_ids = [uuid.UUID(entry["row_id"]) for entry in batch]
+    where_desc = " and ".join(f"{f.column} {f.op} {_fmt(f.value)}" for f in filters)
+    reply = (
+        f'This will delete {len(matched)} row{"s" if len(matched) != 1 else ""} where {where_desc}. '
+        'Reply "yes" to confirm, or say something else to cancel.'
+    )
+
+    plan = {"kind": "delete", "filters": _filters_to_json(filters)}
+    await redis_client.set(pending_key, json.dumps(plan), ex=PENDING_TTL_SECONDS)
+    return await _log_and_respond(db, user, file_id, sheet_id, reply)
+
+
+async def _commit_delete(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan: dict) -> str:
+    filters = _filters_from_json(plan["filters"])
+
+    rows_result = await db.execute(
+        select(SheetRow).where(SheetRow.sheet_id == sheet_id).order_by(SheetRow.row_index)
+    )
+    sheet_rows = rows_result.scalars().all()
+
+    to_delete = [sr for sr in sheet_rows if matches_filters(sr.data, filters)]
+    if not to_delete:
+        return "Nothing to delete — no matching rows found."
+
+    deleted_snapshot = [{"row_index": sr.row_index, "data": sr.data} for sr in to_delete]
+    delete_ids = {sr.id for sr in to_delete}
+    remaining = [sr for sr in sheet_rows if sr.id not in delete_ids]
+
+    for new_idx, sr in enumerate(remaining):
+        if sr.row_index != new_idx:
+            sr.row_index = new_idx
+    for sr in to_delete:
+        await db.delete(sr)
+
+    sheet = await db.get(Sheet, sheet_id)
+    sheet.row_count = len(remaining)
+    db_file = (await db.execute(select(File).where(File.id == sheet.file_id))).scalar_one()
+    db_file.total_rows = db_file.total_rows - len(to_delete)
+
+    await db.commit()
+    await redis_client.set(
+        _last_write_key(user.id, sheet_id),
+        json.dumps({"kind": "delete", "rows": deleted_snapshot}),
+        ex=UNDO_TTL_SECONDS,
+    )
+
+    await manager.publish(str(sheet_id), {
+        "type": "rows_deleted",
+        "row_indexes": [d["row_index"] for d in deleted_snapshot],
+        "remaining": len(remaining),
+        "user_id": str(user.id),
+    })
+
+    return (
+        f'Done — deleted {len(to_delete)} row{"s" if len(to_delete) != 1 else ""}. '
+        'Reply "undo" if you want to restore them.'
+    )
+
+
+async def _preview_add_row(
+    db: AsyncSession,
+    user: User,
+    file_id: uuid.UUID,
+    sheet_id: uuid.UUID,
+    data: dict[str, Any],
+    pending_key: str,
+) -> QueryResponse:
+    if user.role not in (UserRole.admin, UserRole.editor):
+        return await _log_and_respond(
+            db, user, file_id, sheet_id,
+            "You don't have permission to edit this sheet — ask an editor or admin.",
+        )
+
+    if not data:
+        return await _log_and_respond(db, user, file_id, sheet_id, "I didn't catch any values for the new row.")
+
+    desc = ", ".join(f"{k} = {_fmt(v)}" for k, v in data.items())
+    reply = f'This will add a new row with {desc}. Reply "yes" to confirm, or say something else to cancel.'
+
+    plan = {"kind": "add_row", "data": data}
+    await redis_client.set(pending_key, json.dumps(plan), ex=PENDING_TTL_SECONDS)
+    return await _log_and_respond(db, user, file_id, sheet_id, reply)
+
+
+async def _commit_add_row(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan: dict) -> str:
+    data = plan["data"]
+
+    sheet = await db.get(Sheet, sheet_id)
+    new_index = sheet.row_count
+    new_row = SheetRow(sheet_id=sheet_id, row_index=new_index, data=data)
+    db.add(new_row)
+    sheet.row_count = new_index + 1
+    db_file = (await db.execute(select(File).where(File.id == sheet.file_id))).scalar_one()
+    db_file.total_rows = db_file.total_rows + 1
+
+    await db.flush()
+    await redis_client.set(
+        _last_write_key(user.id, sheet_id),
+        json.dumps({"kind": "add_row", "row_id": str(new_row.id)}),
+        ex=UNDO_TTL_SECONDS,
+    )
+    await db.commit()
+
+    await manager.publish(str(sheet_id), {
+        "type": "row_added", "row_index": new_index, "data": data, "user_id": str(user.id),
+    })
+
+    return 'Done — added a new row. Reply "undo" if you want to remove it.'
+
+
+COMMIT_HANDLERS = {
+    "write": _commit_write,
+    "reorder": _commit_reorder,
+    "delete": _commit_delete,
+    "add_row": _commit_add_row,
+}
+
+
+async def _undo_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, batch: dict) -> str:
+    entries = batch["entries"]
+    row_ids = [uuid.UUID(entry["row_id"]) for entry in entries]
     rows_result = await db.execute(select(SheetRow).where(SheetRow.id.in_(row_ids)))
     rows_by_id = {sr.id: sr for sr in rows_result.scalars().all()}
 
     reverted: list[tuple[SheetRow, str, Any]] = []
-    for entry in batch:
+    for entry in entries:
         sr = rows_by_id.get(uuid.UUID(entry["row_id"]))
         if sr is None:
             continue
@@ -301,10 +526,9 @@ async def _handle_undo(db: AsyncSession, user: User, file_id: uuid.UUID, sheet_i
         reverted.append((sr, column, old_value))
 
     if not reverted:
-        return await _log_and_respond(db, user, file_id, sheet_id, "Couldn't undo — those rows no longer exist.")
+        return "Couldn't undo — those rows no longer exist."
 
     await db.commit()
-
     for sr, column, old_value in reverted:
         await manager.publish(str(sheet_id), {
             "type": "cell_edit",
@@ -314,11 +538,111 @@ async def _handle_undo(db: AsyncSession, user: User, file_id: uuid.UUID, sheet_i
         })
 
     column_name = reverted[0][1]
-    return await _log_and_respond(
-        db, user, file_id, sheet_id,
+    return (
         f'Undone — reverted "{column_name}" back to its previous value for '
-        f'{len(reverted)} row{"s" if len(reverted) != 1 else ""}.',
+        f'{len(reverted)} row{"s" if len(reverted) != 1 else ""}.'
     )
+
+
+async def _undo_reorder(db: AsyncSession, user: User, sheet_id: uuid.UUID, batch: dict) -> str:
+    order: list[str] = batch["order"]
+    rows_result = await db.execute(select(SheetRow).where(SheetRow.sheet_id == sheet_id))
+    rows_by_id = {str(sr.id): sr for sr in rows_result.scalars().all()}
+
+    changed = 0
+    for new_index, row_id in enumerate(order):
+        sr = rows_by_id.get(row_id)
+        if sr is not None and sr.row_index != new_index:
+            sr.row_index = new_index
+            changed += 1
+
+    if not changed:
+        return "Couldn't undo — the rows have already changed since then."
+
+    await db.commit()
+    await manager.publish(str(sheet_id), {"type": "rows_reordered", "user_id": str(user.id)})
+    return "Undone — restored the previous row order."
+
+
+async def _undo_delete(db: AsyncSession, user: User, sheet_id: uuid.UUID, batch: dict) -> str:
+    entries = batch["rows"]
+
+    rows_result = await db.execute(
+        select(SheetRow).where(SheetRow.sheet_id == sheet_id).order_by(SheetRow.row_index)
+    )
+    next_index = len(rows_result.scalars().all())
+
+    for entry in entries:
+        db.add(SheetRow(sheet_id=sheet_id, row_index=next_index, data=entry["data"]))
+        next_index += 1
+
+    sheet = await db.get(Sheet, sheet_id)
+    sheet.row_count = next_index
+    db_file = (await db.execute(select(File).where(File.id == sheet.file_id))).scalar_one()
+    db_file.total_rows = db_file.total_rows + len(entries)
+
+    await db.commit()
+    await manager.publish(str(sheet_id), {"type": "row_added", "row_index": next_index - 1, "user_id": str(user.id)})
+
+    return (
+        f'Restored {len(entries)} deleted row{"s" if len(entries) != 1 else ""} '
+        "(added back at the end of the sheet)."
+    )
+
+
+async def _undo_add_row(db: AsyncSession, user: User, sheet_id: uuid.UUID, batch: dict) -> str:
+    row = await db.get(SheetRow, uuid.UUID(batch["row_id"]))
+    if row is None:
+        return "Couldn't undo — that row no longer exists."
+
+    await db.delete(row)
+
+    rows_result = await db.execute(
+        select(SheetRow).where(SheetRow.sheet_id == sheet_id).order_by(SheetRow.row_index)
+    )
+    remaining = rows_result.scalars().all()
+    for new_idx, sr in enumerate(remaining):
+        if sr.row_index != new_idx:
+            sr.row_index = new_idx
+
+    sheet = await db.get(Sheet, sheet_id)
+    sheet.row_count = len(remaining)
+    db_file = (await db.execute(select(File).where(File.id == sheet.file_id))).scalar_one()
+    db_file.total_rows = db_file.total_rows - 1
+
+    await db.commit()
+    await manager.publish(str(sheet_id), {
+        "type": "rows_deleted", "row_indexes": [], "remaining": len(remaining), "user_id": str(user.id),
+    })
+
+    return "Undone — removed the row I added."
+
+
+UNDO_HANDLERS = {
+    "write": _undo_write,
+    "reorder": _undo_reorder,
+    "delete": _undo_delete,
+    "add_row": _undo_add_row,
+}
+
+
+async def _handle_undo(db: AsyncSession, user: User, file_id: uuid.UUID, sheet_id: uuid.UUID) -> QueryResponse:
+    if user.role not in (UserRole.admin, UserRole.editor):
+        return await _log_and_respond(db, user, file_id, sheet_id, "You don't have permission to edit this sheet.")
+
+    key = _last_write_key(user.id, sheet_id)
+    raw = await redis_client.get(key)
+    if not raw:
+        return await _log_and_respond(db, user, file_id, sheet_id, "There's nothing to undo.")
+
+    await redis_client.delete(key)
+    batch = json.loads(raw)
+    handler = UNDO_HANDLERS.get(batch.get("kind", "write"))
+    if handler is None:
+        return await _log_and_respond(db, user, file_id, sheet_id, "There's nothing to undo.")
+
+    reply = await handler(db, user, sheet_id, batch)
+    return await _log_and_respond(db, user, file_id, sheet_id, reply)
 
 
 @router.post("/files/{file_id}/sheets/{sheet_id}/query", response_model=QueryResponse)
@@ -355,7 +679,8 @@ async def query_sheet(
             return await _log_and_respond(db, user, file_id, sheet_id, "You don't have permission to edit this sheet.")
         plan = json.loads(pending_raw)
         await redis_client.delete(pending_key)
-        reply = await _commit_write(db, user, sheet_id, plan)
+        handler = COMMIT_HANDLERS.get(plan.get("kind", "write"))
+        reply = await handler(db, user, sheet_id, plan) if handler else "Something went wrong — try again."
         return await _log_and_respond(db, user, file_id, sheet_id, reply)
 
     if lowered in CANCEL_WORDS:
@@ -382,6 +707,14 @@ async def query_sheet(
         )
 
     try:
+        delete_intent = parse_delete_intent(text, column_names)
+    except QueryParseError:
+        delete_intent = None
+
+    if delete_intent is not None:
+        return await _preview_delete(db, user, file_id, sheet_id, rows, delete_intent.filters, pending_key)
+
+    try:
         parsed = parse_query(text, column_names)
         result = run_query(parsed, rows, columns_meta)
         reply = _describe_result(parsed, result)
@@ -403,6 +736,18 @@ async def query_sheet(
                 db, user, file_id, sheet_id, rows,
                 plan.column, plan.filters, plan.value, plan.op, pending_key,
             )
+
+        if isinstance(plan, ai_query.AIReorderPlan):
+            return await _preview_reorder(
+                db, user, file_id, sheet_id, len(rows),
+                plan.column, plan.priority_values, pending_key,
+            )
+
+        if isinstance(plan, ai_query.AIDeletePlan):
+            return await _preview_delete(db, user, file_id, sheet_id, rows, plan.filters, pending_key)
+
+        if isinstance(plan, ai_query.AIAddRowPlan):
+            return await _preview_add_row(db, user, file_id, sheet_id, plan.data, pending_key)
 
         try:
             result = run_raw_sql(plan.sql, rows, columns_meta)

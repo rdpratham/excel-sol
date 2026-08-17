@@ -29,6 +29,11 @@ interface RowsDeletedMsg {
   user_id: string
 }
 
+interface RowsReorderedMsg {
+  type: 'rows_reordered'
+  user_id: string
+}
+
 interface CellStyleMsg {
   type: 'cell_style'
   cells: { row_index: number; col_key: string }[]
@@ -70,6 +75,7 @@ type ServerMsg =
   | CellEditMsg
   | RowAddedMsg
   | RowsDeletedMsg
+  | RowsReorderedMsg
   | PresenceStateMsg
   | PresenceJoinMsg
   | PresenceLeaveMsg
@@ -81,6 +87,7 @@ interface UseSheetSocketHandlers {
   onCellEdit?: (rowIndex: number, cells: { col_key: string; value: unknown }[]) => void
   onRowAdded?: () => void
   onRowsDeleted?: () => void
+  onRowsReordered?: () => void
   onCellStyle?: (cells: { row_index: number; col_key: string }[], style: Record<string, unknown>) => void
   onColumnFormat?: (colKey: string, format?: string, align?: string) => void
   onColumnsChanged?: () => void
@@ -142,6 +149,9 @@ export function useSheetSocket(sheetId: string | undefined, handlers: UseSheetSo
             break
           case 'rows_deleted':
             handlersRef.current.onRowsDeleted?.()
+            break
+          case 'rows_reordered':
+            handlersRef.current.onRowsReordered?.()
             break
           case 'cell_style':
             handlersRef.current.onCellStyle?.(msg.cells, msg.style)
