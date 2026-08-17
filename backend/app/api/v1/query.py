@@ -70,7 +70,9 @@ def _describe_result(parsed: ParsedQuery, result: dict) -> str:
     n = len(result["rows"])
     if parsed.select_all:
         return f"Found {n} row{'s' if n != 1 else ''}."
-    parts = [parsed.agg.lower()]  # type: ignore[union-attr]
+    if parsed.agg is None and parsed.distinct:
+        return f"Found {n} unique value{'s' if n != 1 else ''} for {parsed.metric_col}."
+    parts = [("count of distinct" if parsed.distinct else parsed.agg.lower())]  # type: ignore[union-attr]
     if parsed.metric_col:
         parts.append(f"of {parsed.metric_col}")
     if parsed.group_col:

@@ -54,12 +54,21 @@ def run_query(parsed: ParsedQuery, rows: list[dict], columns_meta: list[dict]) -
         con.register("sheet", df)
         where_sql, params = _build_where(parsed.filters)
 
-        if not parsed.select_all:
+        if not parsed.select_all and parsed.agg is None and parsed.distinct:
+            # "unique X" / "distinct X" — list the column's distinct values
+            col = _quote(parsed.metric_col)
+            sql = f"SELECT DISTINCT {col} FROM sheet"
+            if where_sql:
+                sql += f" WHERE {where_sql}"
+            sql += f" ORDER BY {col} LIMIT {parsed.limit}"
+        elif not parsed.select_all:
             select_parts = []
             if parsed.group_col:
                 select_parts.append(_quote(parsed.group_col))
             if parsed.agg == "COUNT" and not parsed.metric_col:
                 agg_expr = "COUNT(*)"
+            elif parsed.agg == "COUNT" and parsed.distinct:
+                agg_expr = f"COUNT(DISTINCT {_quote(parsed.metric_col)})"
             else:
                 agg_expr = f"{parsed.agg}({_quote(parsed.metric_col)})"
             select_parts.append(f"{agg_expr} AS result")

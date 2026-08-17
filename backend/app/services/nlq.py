@@ -48,6 +48,14 @@ _AGG_RE = re.compile(
     rf"^(?:what(?:'s| is)?\s+the\s+)?({AGG_WORDS})\s*(?:of\s+)?(.*?)(?:\s+where\s+(.+))?$",
     re.I,
 )
+_UNIQUE_COUNT_RE = re.compile(
+    r"^(?:how many|count(?:\s+of)?|number of)\s+(?:unique|distinct|different)\s+"
+    r"(.+?)(?:\s+are there|\s+are\s+there)?(?:\s+where\s+(.+))?$",
+    re.I,
+)
+_UNIQUE_LIST_RE = re.compile(
+    r"^(?:unique|distinct)\s+(.+?)(?:\s+values?)?(?:\s+where\s+(.+))?$", re.I,
+)
 _TOPN_RE = re.compile(r"^top\s+(\d+)\s*(?:.*?\s+)?by\s+(.+)$", re.I)
 _SORT_RE = re.compile(r"^(?:sort|order)(?:ed)?\s+by\s+(.+?)(?:\s+(asc|ascending|desc|descending))?$", re.I)
 _FILTER_RE = re.compile(r"^(?:show|find|list|get)\s+(?:me\s+)?(?:all\s+)?(?:rows|records)?\s*where\s+(.+)$", re.I)
@@ -76,6 +84,7 @@ class ParsedQuery:
     filters: list[Filter] = field(default_factory=list)
     sort_col: Optional[str] = None
     sort_desc: bool = False
+    distinct: bool = False  # COUNT(DISTINCT col) or SELECT DISTINCT col
     limit: int = 500
 
 
@@ -166,6 +175,25 @@ def parse_query(text: str, columns: list[str]) -> ParsedQuery:
         n, sort_phrase = m.groups()
         sort_col = _resolve_column(sort_phrase, columns)
         return ParsedQuery(sort_col=sort_col, sort_desc=True, limit=min(int(n), 5000))
+
+    # "how many unique X [are there]", "count distinct X", "number of unique X"
+    m = _UNIQUE_COUNT_RE.match(q)
+    if m:
+        col_phrase, where_phrase = m.groups()
+        col = _resolve_column(col_phrase, columns)
+        filters = _parse_filters(where_phrase, columns)
+        return ParsedQuery(select_all=False, agg="COUNT", metric_col=col, distinct=True, filters=filters, limit=1)
+
+    # "unique X", "distinct X [values]" — lists the distinct values themselves
+    m = _UNIQUE_LIST_RE.match(q)
+    if m:
+        col_phrase, where_phrase = m.groups()
+        col = _resolve_column(col_phrase, columns)
+        filters = _parse_filters(where_phrase, columns)
+        return ParsedQuery(
+            select_all=False, agg=None, metric_col=col, distinct=True,
+            filters=filters, sort_col=col, limit=1000,
+        )
 
     # Aggregate with GROUP BY, optional WHERE
     m = _GROUP_AGG_RE.match(q)
