@@ -45,7 +45,7 @@ export function Logo({ size = 'md', showText = true, className }: LogoProps) {
       </svg>
 
       {showText && (
-        <span className={cn('font-bold tracking-tight', s.text)}>
+        <span className={cn('font-display font-bold tracking-tight', s.text)}>
           <span className="brand-gradient-text">Mind</span>
           <span className="text-foreground">Spread</span>
         </span>

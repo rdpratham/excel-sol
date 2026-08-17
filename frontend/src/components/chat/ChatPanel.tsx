@@ -78,7 +78,7 @@ export function ChatPanel({ fileId, sheetId, onClose }: ChatPanelProps) {
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div className="flex items-center gap-1.5">
           <Sparkles className="h-3.5 w-3.5 text-primary" />
-          <p className="text-sm font-semibold">AI Assistant</p>
+          <p className="font-display text-sm font-semibold tracking-tight">AI Assistant</p>
         </div>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground" aria-label="Close AI assistant">
           <X className="h-4 w-4" />

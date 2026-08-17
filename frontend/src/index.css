@@ -87,6 +87,12 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 
+  /* Distinctive geometric display face for headings — the modern-AI-product
+     look, applied broadly so every page picks it up without per-component edits. */
+  h1, h2, h3 {
+    @apply font-display tracking-tight;
+  }
+
   /* Dense data-tool scrollbars */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { @apply bg-transparent; }

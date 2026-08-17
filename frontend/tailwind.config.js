@@ -7,6 +7,9 @@ export default {
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+        // Distinctive geometric display face for headings/brand — the
+        // "modern AI product" look, used sparingly against Inter body text.
+        display: ['Space Grotesk', 'Inter', 'system-ui', 'sans-serif'],
       },
       colors: {
         // Slate-based neutral palette — swap the accent (indigo) for your brand
