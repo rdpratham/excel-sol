@@ -5,7 +5,7 @@ Only invoked when the free, deterministic rule-based parser (nlq.py) can't
 match a question — most common analytic questions (sums, filters, sorts,
 top-N, distinct counts) are answered by that path with zero latency and
 zero external calls. This module is the escape hatch for genuinely
-open-ended questions, and is a no-op unless GEMINI_API_KEY is set.
+open-ended questions, and is a no-op unless OPENROUTER_API_KEY is set.
 
 Design: the LLM only ever translates the question into a DuckDB SELECT
 statement against the sheet's own data — it never sees or touches
@@ -25,7 +25,7 @@ import httpx
 
 from app.config import settings
 
-GEMINI_URL_TMPL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 _SELECT_ONLY_RE = re.compile(r"^\s*select\b", re.I)
 
@@ -35,16 +35,12 @@ class AIQueryError(Exception):
 
 
 def is_available() -> bool:
-    return bool(settings.GEMINI_API_KEY)
+    return bool(settings.OPENROUTER_API_KEY)
 
 
-async def generate_sql(question: str, columns_meta: list[dict]) -> tuple[str, str]:
-    """Returns (sql, message). Raises AIQueryError if unavailable or unsafe."""
-    if not settings.GEMINI_API_KEY:
-        raise AIQueryError("AI query isn't configured for this deployment.")
-
+def _build_prompt(question: str, columns_meta: list[dict]) -> str:
     schema_desc = ", ".join(f'"{c["name"]}" ({c.get("dtype", "text")})' for c in columns_meta)
-    prompt = (
+    return (
         'You are a data analyst. There is exactly one table available, named "sheet", '
         f"with these columns: {schema_desc}.\n\n"
         f'User question: "{question}"\n\n'
@@ -59,33 +55,17 @@ async def generate_sql(question: str, columns_meta: list[dict]) -> tuple[str, st
         '"sheet", never reference a column not listed above.'
     )
 
-    url = GEMINI_URL_TMPL.format(model=settings.GEMINI_MODEL)
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(
-                url,
-                params={"key": settings.GEMINI_API_KEY},
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-            )
-    except httpx.HTTPError:
-        raise AIQueryError("Couldn't reach the AI service — please try again.")
 
-    if resp.status_code != 200:
-        raise AIQueryError(f"AI request failed (HTTP {resp.status_code}).")
-
-    try:
-        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, ValueError):
-        raise AIQueryError("AI returned an unexpected response.")
-
+def _extract_json(text: str) -> dict:
     # Models sometimes wrap JSON in a markdown fence despite instructions not to
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.I).strip()
-
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.I).strip()
     try:
-        parsed = json.loads(text)
+        return json.loads(cleaned)
     except json.JSONDecodeError:
         raise AIQueryError("AI returned a response I couldn't parse — try rephrasing.")
 
+
+def _validate_sql(parsed: dict) -> tuple[str, str]:
     sql = parsed.get("sql")
     message = parsed.get("message") or "Here's what I found."
 
@@ -97,3 +77,35 @@ async def generate_sql(question: str, columns_meta: list[dict]) -> tuple[str, st
         raise AIQueryError("The AI's answer wasn't a safe read-only query — try rephrasing.")
 
     return stripped, message
+
+
+async def generate_sql(question: str, columns_meta: list[dict]) -> tuple[str, str]:
+    """Returns (sql, message). Raises AIQueryError if unavailable or unsafe."""
+    if not settings.OPENROUTER_API_KEY:
+        raise AIQueryError("AI query isn't configured for this deployment.")
+
+    prompt = _build_prompt(question, columns_meta)
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                OPENROUTER_URL,
+                headers={"Authorization": f"Bearer {settings.OPENROUTER_API_KEY}"},
+                json={
+                    "model": settings.OPENROUTER_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+    except httpx.HTTPError:
+        raise AIQueryError("Couldn't reach the AI service — please try again.")
+
+    if resp.status_code != 200:
+        raise AIQueryError(f"AI request failed (HTTP {resp.status_code}).")
+
+    try:
+        text = resp.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, ValueError):
+        raise AIQueryError("AI returned an unexpected response.")
+
+    parsed = _extract_json(text)
+    return _validate_sql(parsed)

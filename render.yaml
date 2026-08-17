@@ -44,10 +44,11 @@ services:
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
-      # Optional — get a free key at https://aistudio.google.com/apikey.
-      # Only used as a fallback when the free rule-based query parser can't
-      # match a question. Leave unset to keep the AI panel fully rule-based.
-      - key: GEMINI_API_KEY
+      # Optional — get a free key at https://openrouter.ai/keys (free Llama
+      # models, no card required). Only used as a fallback when the free
+      # rule-based query parser can't match a question. Leave unset to keep
+      # the AI panel fully rule-based.
+      - key: OPENROUTER_API_KEY
         sync: false
 
   # ── Frontend static site ─────────────────────────────────────────────────────

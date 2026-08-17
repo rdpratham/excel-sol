@@ -7,11 +7,12 @@ Plain-language querying over a sheet's data.
 Two-tier engine: nlq.py pattern-matches a fixed grammar of common analytic
 phrasings (sums, filters, sorts, top-N, distinct counts) with zero latency
 and zero external calls. When a question doesn't match that grammar and
-GEMINI_API_KEY is configured, it falls back to ai_query.py, which asks
-Gemini to translate the question into a SELECT statement and runs it
-through the same DuckDB engine (sandboxed — see query_runner.run_raw_sql).
-Without a Gemini key, unmatched questions just get the rule-based parser's
-error message with example phrasings, same as before.
+OPENROUTER_API_KEY is configured, it falls back to ai_query.py, which asks
+a free-tier LLM (Llama via OpenRouter) to translate the question into a
+SELECT statement and runs it through the same DuckDB engine (sandboxed —
+see query_runner.run_raw_sql). Without a key, unmatched questions just get
+the rule-based parser's error message with example phrasings, same as
+before.
 """
 
 import uuid

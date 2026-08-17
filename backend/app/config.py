@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     # Optional LLM fallback for the "Ask AI" query panel — only used when the
     # free rule-based parser (nlq.py) can't match a question. Unset means the
     # panel runs purely on the deterministic, zero-cost pattern matcher.
-    GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct:free"
 
     @property
     def is_production(self) -> bool:
