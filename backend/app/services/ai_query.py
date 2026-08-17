@@ -55,8 +55,9 @@ class AISelectPlan:
 class AIWritePlan:
     column: str
     filters: list[Filter]
-    new_value: Any
+    value: Any
     message: str
+    op: str = "set"
 
 
 def is_available() -> bool:
@@ -85,11 +86,21 @@ def _build_prompt(question: str, columns_meta: list[dict]) -> str:
         "listed above)\n"
         '  "filters": a list of {"column", "op", "value"} objects describing which rows to '
         'change (op is one of =, !=, >, <, >=, <=); use an empty list to mean every row\n'
-        '  "new_value": the value to set in that column for matching rows\n'
+        '  "write_op": one of "set" (replace with a literal value), "increase_by" / '
+        '"decrease_by" (add/subtract a number from the current cell), or '
+        '"increase_by_percent" / "decrease_by_percent" (e.g. give a 10% raise) — pick '
+        'whichever matches the request; use "set" for anything that just names a new value\n'
+        '  "value": for "set", the literal value to write; for the other write_ops, the '
+        "number to add/subtract or the percentage\n"
         '  "message": a short, friendly, one-sentence description of the change, e.g. '
-        '\'Setting "Company" to "XYZ" for rows where Company is "Afresh".\'\n\n'
+        '\'Setting "Company" to "XYZ" for rows where Company is "Afresh".\' or '
+        '\'Increasing "Salary" by 10% for rows where Role is "C-suite".\'\n\n'
         "Never invent a column name that isn't in the list above. Never respond with SQL "
-        "for a write request — writes are always column/filters/new_value, never raw SQL."
+        "for a write request — writes are always column/filters/write_op/value, never raw "
+        "SQL. If the request describes different changes for different groups of rows (e.g. "
+        '"give C-suite a 10% raise and everyone else 5%"), only describe ONE of the two '
+        "groups in this reply and say in \"message\" that the other group needs a separate "
+        "follow-up command — never invent a way to encode two different amounts in one plan."
     )
 
 
@@ -127,8 +138,15 @@ def _validate_write(parsed: dict, column_names: list[str]) -> AIWritePlan:
     except QueryParseError as e:
         raise AIQueryError(str(e))
 
-    if "new_value" not in parsed or parsed["new_value"] is None:
-        raise AIQueryError("The AI didn't say what value to set — try rephrasing.")
+    # Accept "value" (current schema) and fall back to the older "new_value"
+    # key in case the model doesn't follow the prompt exactly.
+    value = parsed.get("value", parsed.get("new_value"))
+    if value is None:
+        raise AIQueryError(message)
+
+    write_op = parsed.get("write_op") or parsed.get("op") or "set"
+    if write_op not in {"set", "increase_by", "decrease_by", "increase_by_percent", "decrease_by_percent"}:
+        write_op = "set"
 
     filters: list[Filter] = []
     for raw_filter in parsed.get("filters") or []:
@@ -141,7 +159,7 @@ def _validate_write(parsed: dict, column_names: list[str]) -> AIWritePlan:
         op = raw_filter.get("op") if raw_filter.get("op") in _VALID_OPS else "="
         filters.append(Filter(filter_col, op, raw_filter.get("value")))
 
-    return AIWritePlan(column=column, filters=filters, new_value=parsed["new_value"], message=message)
+    return AIWritePlan(column=column, filters=filters, value=value, message=message, op=write_op)
 
 
 async def classify(question: str, columns_meta: list[dict]) -> AISelectPlan | AIWritePlan:

@@ -12,8 +12,9 @@ either grammar and OPENROUTER_API_KEY is configured, it falls back to
 ai_query.py, which asks a free-tier LLM (via OpenRouter) to classify the
 message as a read (translated to a SELECT, run through the sandboxed
 DuckDB engine — see query_runner.run_raw_sql) or a write (translated to a
-structured column/filters/new_value plan, re-validated against the real
-schema — the model never gets to write raw mutation SQL).
+structured column/filters/op/value plan — op covers a literal "set" as
+well as relative "increase/decrease by N or N%" — re-validated against the
+real schema; the model never gets to write raw mutation SQL).
 
 Writes are never applied immediately. Every write — rule-based or
 AI-classified — produces a preview ("this will change N rows...") that's
@@ -31,6 +32,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -45,10 +47,11 @@ from app.models.user import User, UserRole
 from app.services import ai_query
 from app.services.nlq import Filter, ParsedQuery, QueryParseError, parse_query
 from app.services.query_runner import run_query, run_raw_sql
-from app.services.write_intent import matches_filters, parse_write_intent
+from app.services.write_intent import apply_op, matches_filters, parse_write_intent
 from app.ws.manager import manager
 
 router = APIRouter(tags=["query"])
+log = structlog.get_logger()
 
 MAX_WRITE_ROWS = 5000
 PENDING_TTL_SECONDS = 120
@@ -151,6 +154,23 @@ async def _log_and_respond(
     return QueryResponse(message=reply, sql=sql, columns=columns or [], rows=rows or [])
 
 
+def _describe_op(column: str, op: str, value: Any, *, past: bool = False) -> str:
+    verbs = {
+        "increase_by": "increase", "decrease_by": "decrease",
+        "increase_by_percent": "increase", "decrease_by_percent": "decrease",
+        "set": "set",
+    }
+    verb = verbs.get(op, "set")
+    if past:
+        verb = {"increase": "increased", "decrease": "decreased", "set": "set"}[verb]
+
+    if op == "increase_by" or op == "decrease_by":
+        return f'{verb} "{column}" by {_fmt(value)}'
+    if op == "increase_by_percent" or op == "decrease_by_percent":
+        return f'{verb} "{column}" by {value}%'
+    return f'{verb} "{column}" to {_fmt(value)}'
+
+
 async def _preview_write(
     db: AsyncSession,
     user: User,
@@ -159,7 +179,8 @@ async def _preview_write(
     rows: list[dict],
     column: str,
     filters: list[Filter],
-    new_value: Any,
+    value: Any,
+    op: str,
     pending_key: str,
 ) -> QueryResponse:
     if user.role not in (UserRole.admin, UserRole.editor):
@@ -169,6 +190,9 @@ async def _preview_write(
         )
 
     matched = [r for r in rows if matches_filters(r, filters)]
+    if op != "set":
+        matched = [r for r in matched if apply_op(r.get(column), op, value) is not None]
+
     if not matched:
         return await _log_and_respond(db, user, file_id, sheet_id, "No rows match that — nothing to change.")
 
@@ -181,12 +205,12 @@ async def _preview_write(
 
     where_desc = " and ".join(f"{f.column} {f.op} {_fmt(f.value)}" for f in filters) if filters else "every row"
     reply = (
-        f'This will set "{column}" to {_fmt(new_value)} for {len(matched)} row'
+        f'This will {_describe_op(column, op, value)} for {len(matched)} row'
         f'{"s" if len(matched) != 1 else ""} where {where_desc}. '
         'Reply "yes" to confirm, or say something else to cancel.'
     )
 
-    plan = {"column": column, "filters": _filters_to_json(filters), "new_value": new_value}
+    plan = {"column": column, "filters": _filters_to_json(filters), "value": value, "op": op}
     await redis_client.set(pending_key, json.dumps(plan), ex=PENDING_TTL_SECONDS)
     return await _log_and_respond(db, user, file_id, sheet_id, reply)
 
@@ -194,7 +218,8 @@ async def _preview_write(
 async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan: dict) -> str:
     column = plan["column"]
     filters = _filters_from_json(plan["filters"])
-    new_value = plan["new_value"]
+    value = plan["value"]
+    op = plan.get("op", "set")
 
     rows_result = await db.execute(
         select(SheetRow).where(SheetRow.sheet_id == sheet_id).order_by(SheetRow.row_index)
@@ -207,7 +232,8 @@ async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan:
         if not matches_filters(sr.data, filters):
             continue
         old_value = sr.data.get(column)
-        if old_value == new_value:
+        new_value = apply_op(old_value, op, value)
+        if new_value is None or old_value == new_value:
             continue
         new_data = dict(sr.data)
         new_data[column] = new_value
@@ -230,13 +256,13 @@ async def _commit_write(db: AsyncSession, user: User, sheet_id: uuid.UUID, plan:
         await manager.publish(str(sheet_id), {
             "type": "cell_edit",
             "row_index": sr.row_index,
-            "cells": [{"col_key": column, "value": new_value}],
+            "cells": [{"col_key": column, "value": sr.data.get(column)}],
             "user_id": str(user.id),
         })
 
     return (
-        f'Done — updated "{column}" to {_fmt(new_value)} for {len(changed)} row{"s" if len(changed) != 1 else ""}. '
-        'Reply "undo" if you want to revert this.'
+        f'Done — {_describe_op(column, op, value, past=True)} '
+        f'for {len(changed)} row{"s" if len(changed) != 1 else ""}. Reply "undo" if you want to revert this.'
     )
 
 
@@ -352,7 +378,7 @@ async def query_sheet(
     if write_intent is not None:
         return await _preview_write(
             db, user, file_id, sheet_id, rows,
-            write_intent.column, write_intent.filters, write_intent.new_value, pending_key,
+            write_intent.column, write_intent.filters, write_intent.value, write_intent.op, pending_key,
         )
 
     try:
@@ -375,15 +401,17 @@ async def query_sheet(
         if isinstance(plan, ai_query.AIWritePlan):
             return await _preview_write(
                 db, user, file_id, sheet_id, rows,
-                plan.column, plan.filters, plan.new_value, pending_key,
+                plan.column, plan.filters, plan.value, plan.op, pending_key,
             )
 
         try:
             result = run_raw_sql(plan.sql, rows, columns_meta)
-        except Exception:
+        except Exception as e:
+            log.warning("ai_read_sql_failed", sql=plan.sql, error=str(e))
             return await _log_and_respond(
                 db, user, file_id, sheet_id,
-                "The AI's query couldn't run against this sheet — try rephrasing.",
+                "The AI's query couldn't run against this sheet — try rephrasing, "
+                "or be more specific about which column and rows you mean.",
             )
         return await _log_and_respond(
             db, user, file_id, sheet_id, plan.message,
