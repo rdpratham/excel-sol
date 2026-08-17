@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { LogOut, ChevronDown } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import * as Avatar from '@radix-ui/react-avatar'
@@ -10,6 +11,31 @@ const ROLE_BADGE: Record<string, string> = {
   admin: 'bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300',
   editor: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
   viewer: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400',
+}
+
+const IST_FORMATTER = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: true,
+})
+
+// Isolated so its once-a-second tick only re-renders this small subtree,
+// not the whole TopBar (dropdown menu etc).
+function LiveClock() {
+  const [now, setNow] = useState(() => IST_FORMATTER.format(new Date()))
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(IST_FORMATTER.format(new Date())), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <span className="hidden items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 font-mono text-xs tabular-nums text-muted-foreground sm:flex">
+      {now} <span className="font-sans font-medium">IST</span>
+    </span>
+  )
 }
 
 export function TopBar() {
@@ -41,8 +67,11 @@ export function TopBar() {
       {/* Brand */}
       <Logo size="sm" />
 
-      {/* User menu */}
-      <DropdownMenu.Root>
+      <div className="flex items-center gap-3">
+        <LiveClock />
+
+        {/* User menu */}
+        <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button className="flex items-center gap-2 rounded-full px-2 py-1 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <Avatar.Root className="brand-gradient h-7 w-7 rounded-full shadow-soft">
@@ -75,7 +104,8 @@ export function TopBar() {
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+        </DropdownMenu.Root>
+      </div>
     </header>
   )
 }

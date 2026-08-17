@@ -86,7 +86,7 @@ export function LoginPage() {
         </div>
 
         <p className="text-xs" style={{ color: 'hsl(215 20% 45%)' }}>
-          © {new Date().getFullYear()} MindSpread. All rights reserved.
+          © {new Date().getFullYear()} MindSpread. All rights reserved. Created by Pratham Jain.
         </p>
       </div>
 
