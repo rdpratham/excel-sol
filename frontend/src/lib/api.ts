@@ -116,6 +116,22 @@ export const filesApi = {
     }),
 }
 
+// ── Row editing ───────────────────────────────────────────────────────────────
+
+export const rowsApi = {
+  patch: (fileId: string, sheetId: string, rowIndex: number, cells: { col_key: string; value: unknown }[]) =>
+    api.patch(`/files/${fileId}/sheets/${sheetId}/rows/${rowIndex}`, { cells }),
+
+  append: (fileId: string, sheetId: string, data: Record<string, unknown> = {}) =>
+    api.post(`/files/${fileId}/sheets/${sheetId}/rows`, { data }),
+
+  deleteRows: (fileId: string, sheetId: string, rowIndexes: number[]) =>
+    api.delete(`/files/${fileId}/sheets/${sheetId}/rows`, { data: { row_indexes: rowIndexes } }),
+
+  exportUrl: (fileId: string, sheetId: string) =>
+    `${api.defaults.baseURL}/files/${fileId}/sheets/${sheetId}/export`,
+}
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 export const statsApi = {
