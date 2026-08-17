@@ -18,14 +18,15 @@ const queryClient = new QueryClient({
 })
 
 function AuthBootstrap({ children }: { children: React.ReactNode }) {
-  const { user, setAuth, setLoading, clearAuth } = useAuthStore()
+  const { setAuth, setLoading, clearAuth } = useAuthStore()
 
-  // On first mount, try to restore session via the refresh token cookie.
+  // On every hard page load, always refresh via the httpOnly cookie — the
+  // access token is memory-only (by design) so it's gone after a refresh
+  // even though `user` survives in localStorage. Skipping this when `user`
+  // was already cached let pages render with accessToken still null, which
+  // the axios interceptor could paper over reactively on 401 for normal API
+  // calls, but not for the sheet WebSocket handshake (no retry-on-401 there).
   useEffect(() => {
-    if (user) {
-      setLoading(false)
-      return
-    }
     setLoading(true)
     authApi
       .refresh()

@@ -27,19 +27,29 @@ REFRESH_COOKIE = "refresh_token"
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
+    # Frontend and backend live on different onrender.com subdomains, which
+    # browsers treat as cross-site (onrender.com is on the public suffix
+    # list) — SameSite=Lax is silently dropped on cross-site XHR/fetch, so
+    # the refresh call always failed in production. SameSite=None requires
+    # Secure, which is only available (and only needed) in production.
     response.set_cookie(
         key=REFRESH_COOKIE,
         value=token,
         httponly=True,
         secure=settings.is_production,
-        samesite="lax",
+        samesite="none" if settings.is_production else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
         path="/api/v1/auth",
     )
 
 
 def _clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(key=REFRESH_COOKIE, path="/api/v1/auth")
+    response.delete_cookie(
+        key=REFRESH_COOKIE,
+        path="/api/v1/auth",
+        secure=settings.is_production,
+        samesite="none" if settings.is_production else "lax",
+    )
 
 
 async def _audit(db: AsyncSession, user_id, action: str, ip: str, ua: str, meta: dict | None = None) -> None:
