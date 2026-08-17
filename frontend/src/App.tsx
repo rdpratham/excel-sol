@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LoginPage } from '@/pages/LoginPage'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { SheetPage } from '@/pages/SheetPage'
 import { Toaster } from '@/components/ui/toaster'
 import { useAuthStore } from '@/stores/authStore'
 import { authApi } from '@/lib/api'
@@ -79,7 +80,14 @@ export default function App() {
                 </RequireAuth>
               }
             />
-            {/* Phase 3 will add /files/:fileId/sheets/:sheetId */}
+            <Route
+              path="/files/:fileId/sheets/:sheetId"
+              element={
+                <RequireAuth>
+                  <SheetPage />
+                </RequireAuth>
+              }
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           <Toaster />

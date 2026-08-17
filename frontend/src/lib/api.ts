@@ -1,6 +1,6 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/authStore'
-import type { TokenResponse } from '@/types'
+import type { DashboardStats, RowsResponse, SpreadsheetFile, TokenResponse } from '@/types'
 
 // In dev the Vite proxy handles /api → localhost:8000, so we use relative paths.
 // In production VITE_API_URL points to the backend service.
@@ -88,4 +88,36 @@ export const authApi = {
   logout: () => api.post('/auth/logout'),
 
   me: () => api.get<TokenResponse['user']>('/auth/me'),
+}
+
+// ── Files ─────────────────────────────────────────────────────────────────────
+
+export const filesApi = {
+  upload: (file: File, onProgress?: (pct: number) => void) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post<SpreadsheetFile>('/files/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100))
+      },
+    })
+  },
+
+  list: () => api.get<SpreadsheetFile[]>('/files'),
+
+  get: (fileId: string) => api.get<SpreadsheetFile>(`/files/${fileId}`),
+
+  delete: (fileId: string) => api.delete(`/files/${fileId}`),
+
+  getRows: (fileId: string, sheetId: string, page = 1, pageSize = 100) =>
+    api.get<RowsResponse>(`/files/${fileId}/sheets/${sheetId}/rows`, {
+      params: { page, page_size: pageSize },
+    }),
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+export const statsApi = {
+  get: () => api.get<DashboardStats>('/stats'),
 }

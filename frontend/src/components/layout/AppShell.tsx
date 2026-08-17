@@ -7,19 +7,11 @@ import type { SpreadsheetFile, Sheet } from '@/types'
 
 interface AppShellProps {
   children: React.ReactNode
-  files?: SpreadsheetFile[]
-  filesLoading?: boolean
   activeSheetId?: string
   onSheetSelect?: (file: SpreadsheetFile, sheet: Sheet) => void
 }
 
-export function AppShell({
-  children,
-  files = [],
-  filesLoading = false,
-  activeSheetId,
-  onSheetSelect,
-}: AppShellProps) {
+export function AppShell({ children, activeSheetId, onSheetSelect }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
 
   return (
@@ -35,8 +27,6 @@ export function AppShell({
           )}
         >
           <Sidebar
-            files={files}
-            isLoading={filesLoading}
             activeSheetId={activeSheetId}
             onSheetSelect={onSheetSelect ?? (() => {})}
           />

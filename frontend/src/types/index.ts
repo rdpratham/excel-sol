@@ -64,6 +64,17 @@ export interface ApiError {
   }
 }
 
+// ── Sheet rows ────────────────────────────────────────────────────────────────
+
+export interface RowsResponse {
+  columns: SheetColumn[]
+  rows: Record<string, unknown>[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export interface DashboardStats {
