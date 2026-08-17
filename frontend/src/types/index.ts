@@ -85,3 +85,21 @@ export interface DashboardStats {
   ai_queries_this_month: number
   recent_files: SpreadsheetFile[]
 }
+
+// ── AI query panel ────────────────────────────────────────────────────────────
+
+export interface QueryResult {
+  message: string
+  sql: string | null
+  columns: string[]
+  rows: Record<string, unknown>[]
+}
+
+export interface QueryHistoryEntry {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  sql_executed: string | null
+  result_preview: { columns: string[]; rows: Record<string, unknown>[] } | null
+  created_at: string
+}

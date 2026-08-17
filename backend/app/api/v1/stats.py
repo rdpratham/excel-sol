@@ -1,9 +1,12 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, get_db
+from app.models.audit import ChatMessage, ChatRole
 from app.models.file import File, FileStatus
 from app.models.sheet import Sheet
 
@@ -30,6 +33,17 @@ async def get_stats(
     )
     row = agg.one()
 
+    # Plain-language queries this user has asked since the start of the month
+    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    query_count_result = await db.execute(
+        select(func.count(ChatMessage.id)).where(
+            ChatMessage.user_id == user.id,
+            ChatMessage.role == ChatRole.user,
+            ChatMessage.created_at >= month_start,
+        )
+    )
+    query_count = query_count_result.scalar_one()
+
     # 5 most-recently uploaded files (any status except deleted)
     recent_result = await db.execute(
         select(File)
@@ -45,7 +59,7 @@ async def get_stats(
         "total_sheets": int(row.total_sheets),
         "total_rows": int(row.total_rows),
         "storage_bytes": int(row.storage_bytes),
-        "ai_queries_this_month": 0,
+        "ai_queries_this_month": query_count,
         "recent_files": [_file_to_dict(f) for f in recent_files],
     }
 

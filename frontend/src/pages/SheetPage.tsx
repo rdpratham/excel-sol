@@ -5,6 +5,7 @@ import {
   Loader2,
   Plus,
   Redo2,
+  Sparkles,
   Trash2,
   Undo2,
 } from 'lucide-react'
@@ -13,6 +14,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/button'
 import { SpreadsheetGrid, type GridRow } from '@/components/grid/SpreadsheetGrid'
 import { PresenceBar } from '@/components/grid/PresenceBar'
+import { ChatPanel } from '@/components/chat/ChatPanel'
 import { filesApi, rowsApi } from '@/lib/api'
 import { useAuthStore } from '@/stores/authStore'
 import { useSheetSocket } from '@/hooks/useSheetSocket'
@@ -39,6 +41,7 @@ export function SheetPage() {
   const [page, setPage] = useState(1)
   const [totalRows, setTotalRows] = useState(0)
   const [selectedRows, setSelectedRows] = useState<number[]>([])
+  const [chatOpen, setChatOpen] = useState(false)
 
   // Undo / redo stacks
   const undoStack = useRef<HistoryEntry[]>([])
@@ -301,26 +304,45 @@ export function SheetPage() {
             <Download className="h-3.5 w-3.5" />
             Export
           </Button>
+
+          <div className="h-4 w-px bg-border" />
+
+          {/* AI Assistant toggle */}
+          <Button
+            variant={chatOpen ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs"
+            onClick={() => setChatOpen((v) => !v)}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Ask AI
+          </Button>
         </div>
 
-        {/* ── Grid ─────────────────────────────────────────────────────── */}
-        <div className="min-h-0 flex-1">
-          {isLoading ? (
-            <div className="flex h-full items-center justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : columns.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              This sheet is empty
-            </div>
-          ) : (
-            <SpreadsheetGrid
-              columns={columns}
-              rows={localRows}
-              totalRows={totalRows}
-              onCellEdited={handleCellEdited}
-              onSelectionChange={setSelectedRows}
-            />
+        {/* ── Grid + AI panel ──────────────────────────────────────────── */}
+        <div className="flex min-h-0 flex-1">
+          <div className="min-w-0 flex-1">
+            {isLoading ? (
+              <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : columns.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                This sheet is empty
+              </div>
+            ) : (
+              <SpreadsheetGrid
+                columns={columns}
+                rows={localRows}
+                totalRows={totalRows}
+                onCellEdited={handleCellEdited}
+                onSelectionChange={setSelectedRows}
+              />
+            )}
+          </div>
+
+          {chatOpen && fileId && sheetId && (
+            <ChatPanel fileId={fileId} sheetId={sheetId} onClose={() => setChatOpen(false)} />
           )}
         </div>
 

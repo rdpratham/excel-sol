@@ -1,6 +1,13 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/authStore'
-import type { DashboardStats, RowsResponse, SpreadsheetFile, TokenResponse } from '@/types'
+import type {
+  DashboardStats,
+  QueryHistoryEntry,
+  QueryResult,
+  RowsResponse,
+  SpreadsheetFile,
+  TokenResponse,
+} from '@/types'
 
 // In dev the Vite proxy handles /api → localhost:8000, so we use relative paths.
 // In production VITE_API_URL points to the backend service.
@@ -136,4 +143,14 @@ export const rowsApi = {
 
 export const statsApi = {
   get: () => api.get<DashboardStats>('/stats'),
+}
+
+// ── AI query panel ────────────────────────────────────────────────────────────
+
+export const queryApi = {
+  ask: (fileId: string, sheetId: string, query: string) =>
+    api.post<QueryResult>(`/files/${fileId}/sheets/${sheetId}/query`, { query }),
+
+  history: (fileId: string, sheetId: string) =>
+    api.get<QueryHistoryEntry[]>(`/files/${fileId}/sheets/${sheetId}/query/history`),
 }
