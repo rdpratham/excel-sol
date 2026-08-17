@@ -52,7 +52,12 @@ class Settings(BaseSettings):
     # free rule-based parser (nlq.py) can't match a question. Unset means the
     # panel runs purely on the deterministic, zero-cost pattern matcher.
     OPENROUTER_API_KEY: Optional[str] = None
-    OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct:free"
+    # OpenRouter's free-tier catalog rotates — as of this writing it has no
+    # free Llama model at all (checked live against openrouter.ai/api/v1/models).
+    # gpt-oss-20b is OpenAI's Apache-2.0 open-weight model, 131k context.
+    # If OpenRouter's free catalog changes again, override via env var —
+    # check https://openrouter.ai/models?max_price=0 for what's current.
+    OPENROUTER_MODEL: str = "openai/gpt-oss-20b:free"
 
     @property
     def is_production(self) -> bool:
