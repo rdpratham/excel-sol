@@ -56,7 +56,7 @@ export function DashboardPage() {
   ]
 
   return (
-    <AppShell onSheetSelect={handleSheetSelect}>
+    <AppShell>
       <div className="p-6">
         {/* Welcome */}
         <div className="mb-6">

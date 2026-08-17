@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useSheetSocket } from '@/hooks/useSheetSocket'
 import { toast } from '@/hooks/useToast'
-import type { CellStyle, CellStylePatch, SheetColumn, SpreadsheetFile, Sheet } from '@/types'
+import type { CellStyle, CellStylePatch, SheetColumn } from '@/types'
 
 const PAGE_SIZE = 500
 
@@ -325,14 +325,10 @@ export function SheetPage() {
     URL.revokeObjectURL(a.href)
   }, [fileId, sheetId, accessToken, file, sheet])
 
-  const handleSheetSelect = (f: SpreadsheetFile, s: Sheet) => {
-    navigate(`/files/${f.id}/sheets/${s.id}`)
-  }
-
   const columns = columnsState.length > 0 ? columnsState : (sheet?.columns ?? rowsData?.columns ?? [])
 
   return (
-    <AppShell activeSheetId={sheetId} onSheetSelect={handleSheetSelect}>
+    <AppShell>
       <div className="flex h-full flex-col">
         {/* ── Home ribbon — Excel-style formatting ─────────────────────── */}
         {fileId && sheetId && columns.length > 0 && (

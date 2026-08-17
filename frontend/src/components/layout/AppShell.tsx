@@ -3,15 +3,12 @@ import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { TopBar } from './TopBar'
 import { Sidebar } from './Sidebar'
 import { cn } from '@/lib/utils'
-import type { SpreadsheetFile, Sheet } from '@/types'
 
 interface AppShellProps {
   children: React.ReactNode
-  activeSheetId?: string
-  onSheetSelect?: (file: SpreadsheetFile, sheet: Sheet) => void
 }
 
-export function AppShell({ children, activeSheetId, onSheetSelect }: AppShellProps) {
+export function AppShell({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
 
   return (
@@ -19,17 +16,14 @@ export function AppShell({ children, activeSheetId, onSheetSelect }: AppShellPro
       <TopBar />
 
       <div className="flex min-h-0 flex-1">
-        {/* Sidebar */}
+        {/* Sidebar — nav rail: Dashboard / Upload / Files */}
         <div
           className={cn(
             'shrink-0 transition-all duration-200',
-            sidebarOpen ? 'w-[280px]' : 'w-0 overflow-hidden',
+            sidebarOpen ? 'w-[200px]' : 'w-0 overflow-hidden',
           )}
         >
-          <Sidebar
-            activeSheetId={activeSheetId}
-            onSheetSelect={onSheetSelect ?? (() => {})}
-          />
+          <Sidebar />
         </div>
 
         {/* Toggle button */}

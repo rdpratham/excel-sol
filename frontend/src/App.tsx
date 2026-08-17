@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LoginPage } from '@/pages/LoginPage'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { UploadPage } from '@/pages/UploadPage'
+import { FilesPage } from '@/pages/FilesPage'
 import { SheetPage } from '@/pages/SheetPage'
 import { Toaster } from '@/components/ui/toaster'
 import { useAuthStore } from '@/stores/authStore'
@@ -78,6 +80,22 @@ export default function App() {
               element={
                 <RequireAuth>
                   <DashboardPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/upload"
+              element={
+                <RequireAuth>
+                  <UploadPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/files"
+              element={
+                <RequireAuth>
+                  <FilesPage />
                 </RequireAuth>
               }
             />
