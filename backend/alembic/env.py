@@ -3,7 +3,7 @@ import sys
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 # Allow imports from backend/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,16 +15,18 @@ alembic_cfg = context.config
 if alembic_cfg.config_file_name:
     fileConfig(alembic_cfg.config_file_name)
 
-# Use psycopg2 (sync) for migrations; the app uses asyncpg at runtime.
-alembic_cfg.set_main_option("sqlalchemy.url", settings.sync_database_url)
+# NOTE: the DB URL is intentionally kept OUT of alembic_cfg / configparser.
+# Passwords can contain "%" (e.g. percent-encoded "@" as "%40"), and
+# configparser's set_main_option() treats "%" as interpolation syntax,
+# raising "invalid interpolation syntax". Build the engine directly instead.
+DB_URL = settings.sync_database_url
 
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    url = alembic_cfg.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=DB_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -34,11 +36,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        alembic_cfg.get_section(alembic_cfg.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    connectable = create_engine(DB_URL, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
