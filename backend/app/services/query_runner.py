@@ -7,6 +7,7 @@ never raw user text; filter values go through parameter binding.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import duckdb
@@ -94,3 +95,28 @@ def run_query(parsed: ParsedQuery, rows: list[dict], columns_meta: list[dict]) -
         con.close()
 
     return {"sql": sql, "columns": out_columns, "rows": out_rows}
+
+
+def run_raw_sql(sql: str, rows: list[dict], columns_meta: list[dict]) -> dict:
+    """Executes an already-validated SELECT statement (from ai_query.generate_sql)
+    against the sheet's data. Runs on a *sandboxed* connection with external
+    access disabled — no filesystem or network functions (read_csv, httpfs,
+    etc.) are reachable, so the only data this SQL can ever see is the
+    in-memory "sheet" table registered below, regardless of what the
+    statement itself says.
+    """
+    col_names = [c["name"] for c in columns_meta]
+    df = pd.DataFrame(rows, columns=col_names) if rows else pd.DataFrame(columns=col_names)
+    df = _coerce_dtypes(df, columns_meta)
+
+    con = duckdb.connect(config={"enable_external_access": False})
+    try:
+        con.register("sheet", df)
+        final_sql = sql if re.search(r"\blimit\b", sql, re.I) else f"{sql} LIMIT 1000"
+        cur = con.execute(final_sql)
+        out_columns = [d[0] for d in cur.description]
+        out_rows = [dict(zip(out_columns, row)) for row in cur.fetchall()]
+    finally:
+        con.close()
+
+    return {"sql": final_sql, "columns": out_columns, "rows": out_rows}

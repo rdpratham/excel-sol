@@ -4,9 +4,14 @@ Plain-language querying over a sheet's data.
   POST /files/{file_id}/sheets/{sheet_id}/query          — ask a question
   GET  /files/{file_id}/sheets/{sheet_id}/query/history   — past Q&A for this sheet
 
-No LLM involved: nlq.py pattern-matches a fixed grammar of common analytic
-phrasings onto a structured query, which query_runner.py executes as SQL
-over an in-memory DuckDB table built from the sheet's rows.
+Two-tier engine: nlq.py pattern-matches a fixed grammar of common analytic
+phrasings (sums, filters, sorts, top-N, distinct counts) with zero latency
+and zero external calls. When a question doesn't match that grammar and
+GEMINI_API_KEY is configured, it falls back to ai_query.py, which asks
+Gemini to translate the question into a SELECT statement and runs it
+through the same DuckDB engine (sandboxed — see query_runner.run_raw_sql).
+Without a Gemini key, unmatched questions just get the rule-based parser's
+error message with example phrasings, same as before.
 """
 
 import uuid
@@ -22,8 +27,9 @@ from app.api.deps import CurrentUser, get_db
 from app.models.audit import ChatMessage, ChatRole
 from app.models.file import File
 from app.models.sheet import Sheet, SheetRow
+from app.services import ai_query
 from app.services.nlq import ParsedQuery, QueryParseError, parse_query
-from app.services.query_runner import run_query
+from app.services.query_runner import run_query, run_raw_sql
 
 router = APIRouter(tags=["query"])
 
@@ -94,23 +100,35 @@ async def query_sheet(
 
     db.add(ChatMessage(user_id=user.id, file_id=file_id, sheet_id=sheet_id, role=ChatRole.user, content=body.query))
 
-    try:
-        parsed = parse_query(body.query, column_names)
-    except QueryParseError as e:
-        db.add(ChatMessage(
-            user_id=user.id, file_id=file_id, sheet_id=sheet_id,
-            role=ChatRole.assistant, content=str(e),
-        ))
-        await db.commit()
-        return QueryResponse(message=str(e), sql=None, columns=[], rows=[])
-
     rows_result = await db.execute(
         select(SheetRow.data).where(SheetRow.sheet_id == sheet_id).order_by(SheetRow.row_index)
     )
     rows = [r[0] for r in rows_result.all()]
 
-    result = run_query(parsed, rows, columns_meta)
-    reply = _describe_result(parsed, result)
+    try:
+        parsed = parse_query(body.query, column_names)
+        result = run_query(parsed, rows, columns_meta)
+        reply = _describe_result(parsed, result)
+    except QueryParseError as rule_based_error:
+        if not ai_query.is_available():
+            db.add(ChatMessage(
+                user_id=user.id, file_id=file_id, sheet_id=sheet_id,
+                role=ChatRole.assistant, content=str(rule_based_error),
+            ))
+            await db.commit()
+            return QueryResponse(message=str(rule_based_error), sql=None, columns=[], rows=[])
+
+        try:
+            sql, ai_message = await ai_query.generate_sql(body.query, columns_meta)
+            result = run_raw_sql(sql, rows, columns_meta)
+            reply = ai_message
+        except ai_query.AIQueryError as e:
+            db.add(ChatMessage(
+                user_id=user.id, file_id=file_id, sheet_id=sheet_id,
+                role=ChatRole.assistant, content=str(e),
+            ))
+            await db.commit()
+            return QueryResponse(message=str(e), sql=None, columns=[], rows=[])
 
     db.add(ChatMessage(
         user_id=user.id, file_id=file_id, sheet_id=sheet_id,
