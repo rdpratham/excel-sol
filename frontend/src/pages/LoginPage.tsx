@@ -48,7 +48,16 @@ export function LoginPage() {
   return (
     <div className="flex min-h-screen">
       {/* ── Left panel: feature showcase ── */}
-      <div className="hidden flex-col justify-between bg-foreground p-10 text-background lg:flex lg:w-5/12">
+      <div className="relative hidden flex-col justify-between overflow-hidden bg-foreground p-10 text-background lg:flex lg:w-5/12">
+        <div
+          className="pointer-events-none absolute inset-0 -z-10"
+          style={{
+            background:
+              'radial-gradient(700px circle at 15% 15%, hsl(217 91% 52% / 0.20), transparent 60%),' +
+              'radial-gradient(700px circle at 85% 40%, hsl(152 76% 40% / 0.16), transparent 60%),' +
+              'radial-gradient(700px circle at 30% 100%, hsl(0 84% 55% / 0.14), transparent 60%)',
+          }}
+        />
         <Logo size="md" showText />
 
         <div className="space-y-8">
@@ -64,7 +73,7 @@ export function LoginPage() {
           <div className="space-y-5">
             {FEATURES.map(({ icon: Icon, label, desc }) => (
               <div key={label} className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg brand-gradient">
+                <div className="brand-gradient mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-soft">
                   <Icon className="h-4 w-4 text-white" />
                 </div>
                 <div>
@@ -82,7 +91,7 @@ export function LoginPage() {
       </div>
 
       {/* ── Right panel: login form ── */}
-      <div className="flex flex-1 flex-col items-center justify-center bg-background px-6 py-12">
+      <div className="brand-mesh flex flex-1 flex-col items-center justify-center bg-background px-6 py-12">
         {/* Mobile logo */}
         <div className="mb-8 lg:hidden">
           <Logo size="md" />
@@ -149,7 +158,7 @@ export function LoginPage() {
 
             <Button
               type="submit"
-              className="h-10 w-full gap-2 text-sm font-semibold"
+              className="hover-lift h-10 w-full gap-2 text-sm font-semibold shadow-soft"
               disabled={isLoading}
             >
               {isLoading ? (

@@ -1,10 +1,11 @@
 import { useNavigate } from 'react-router-dom'
-import { FileSpreadsheet, Rows3, HardDrive, MessageSquare, Files, Loader2 } from 'lucide-react'
+import { FileSpreadsheet, Rows3, HardDrive, MessageSquare, Files, Loader2, Sparkles, Upload } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { AppShell } from '@/components/layout/AppShell'
 import { useAuthStore } from '@/stores/authStore'
 import { statsApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import type { SpreadsheetFile, Sheet } from '@/types'
 
 function formatBytes(bytes: number): string {
@@ -20,15 +21,17 @@ function formatNum(n: number): string {
   return n.toString()
 }
 
+const STATUS_STYLES: Record<string, string> = {
+  ready: 'bg-emerald-500',
+  processing: 'bg-blue-500',
+  uploading: 'bg-amber-500',
+  failed: 'bg-red-500',
+}
+
 function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    ready: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
-    processing: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-    uploading: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-    failed: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-  }
   return (
-    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${styles[status] ?? ''}`}>
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium capitalize text-muted-foreground">
+      <span className={cn('h-1.5 w-1.5 rounded-full', STATUS_STYLES[status] ?? 'bg-muted-foreground')} />
       {status}
     </span>
   )
@@ -48,94 +51,129 @@ export function DashboardPage() {
   }
 
   const kpiCards = [
-    { label: 'Total Files', icon: Files, value: stats ? formatNum(stats.total_files) : '—' },
-    { label: 'Total Sheets', icon: FileSpreadsheet, value: stats ? formatNum(stats.total_sheets) : '—' },
-    { label: 'Total Rows', icon: Rows3, value: stats ? formatNum(stats.total_rows) : '—' },
-    { label: 'Storage Used', icon: HardDrive, value: stats ? formatBytes(stats.storage_bytes) : '—' },
-    { label: 'AI Queries (month)', icon: MessageSquare, value: stats ? formatNum(stats.ai_queries_this_month) : '—' },
+    {
+      label: 'Total Files', icon: Files,
+      value: stats ? formatNum(stats.total_files) : '—',
+      color: 'text-blue-500', bg: 'bg-blue-500/10',
+    },
+    {
+      label: 'Total Sheets', icon: FileSpreadsheet,
+      value: stats ? formatNum(stats.total_sheets) : '—',
+      color: 'text-emerald-500', bg: 'bg-emerald-500/10',
+    },
+    {
+      label: 'Total Rows', icon: Rows3,
+      value: stats ? formatNum(stats.total_rows) : '—',
+      color: 'text-violet-500', bg: 'bg-violet-500/10',
+    },
+    {
+      label: 'Storage Used', icon: HardDrive,
+      value: stats ? formatBytes(stats.storage_bytes) : '—',
+      color: 'text-amber-500', bg: 'bg-amber-500/10',
+    },
+    {
+      label: 'AI Queries (month)', icon: MessageSquare,
+      value: stats ? formatNum(stats.ai_queries_this_month) : '—',
+      color: 'text-rose-500', bg: 'bg-rose-500/10',
+    },
   ]
 
   return (
     <AppShell>
-      <div className="p-6">
+      <div className="brand-mesh min-h-full p-6">
         {/* Welcome */}
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold">
-            Welcome back, {user?.full_name.split(' ')[0]}
-          </h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Here's what's happening with your data.
-          </p>
+        <div className="mb-8 flex flex-wrap items-end justify-between gap-4 animate-fade-in-up">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight">
+              Welcome back, <span className="brand-gradient-text">{user?.full_name.split(' ')[0]}</span>
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Here's what's happening with your data.
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/upload')}
+            className="brand-gradient hover-lift flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-soft"
+          >
+            <Upload className="h-4 w-4" />
+            Upload a file
+          </button>
         </div>
 
         {/* KPI cards */}
         <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          {kpiCards.map(({ label, icon: Icon, value }) => (
-            <Card key={label}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2 pt-4">
-                <CardTitle className="text-xs font-medium text-muted-foreground">{label}</CardTitle>
-                <Icon className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent className="pb-4">
-                {isLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                ) : (
-                  <p className="font-mono text-2xl font-semibold">{value}</p>
-                )}
-              </CardContent>
+          {kpiCards.map(({ label, icon: Icon, value, color, bg }, i) => (
+            <Card
+              key={label}
+              className="hover-lift animate-fade-in-up p-4"
+              style={{ animationDelay: `${i * 60}ms` }}
+            >
+              <div className={cn('mb-3 flex h-9 w-9 items-center justify-center rounded-lg', bg)}>
+                <Icon className={cn('h-[18px] w-[18px]', color)} />
+              </div>
+              <p className="text-xs font-medium text-muted-foreground">{label}</p>
+              {isLoading ? (
+                <Loader2 className="mt-1.5 h-5 w-5 animate-spin text-muted-foreground" />
+              ) : (
+                <p className="mt-1 font-mono text-2xl font-bold tabular-nums">{value}</p>
+              )}
             </Card>
           ))}
         </div>
 
         {/* Recent files */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Recent Files</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <Card className="animate-fade-in-up overflow-hidden" style={{ animationDelay: '300ms' }}>
+          <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+            <h3 className="text-sm font-semibold">Recent Files</h3>
+            {!isLoading && !!stats?.recent_files?.length && (
+              <button
+                onClick={() => navigate('/files')}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                View all
+              </button>
+            )}
+          </div>
+          <CardContent className="p-0">
             {isLoading ? (
-              <div className="flex items-center justify-center py-8">
+              <div className="flex items-center justify-center py-10">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
             ) : !stats?.recent_files?.length ? (
-              <div className="flex flex-col items-center gap-3 py-10 text-center">
-                <FileSpreadsheet className="h-10 w-10 text-muted-foreground/40" />
+              <div className="flex flex-col items-center gap-3 py-14 text-center">
+                <div className="brand-gradient flex h-14 w-14 items-center justify-center rounded-2xl shadow-soft">
+                  <Sparkles className="h-6 w-6 text-white" />
+                </div>
                 <p className="text-sm text-muted-foreground">
-                  Upload a file using the sidebar to get started.
+                  No files yet — upload one to get started.
                 </p>
+                <button
+                  onClick={() => navigate('/upload')}
+                  className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                >
+                  Upload a file
+                </button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                      <th className="pb-2 font-medium">Name</th>
-                      <th className="pb-2 font-medium">Sheets</th>
-                      <th className="pb-2 font-medium">Rows</th>
-                      <th className="pb-2 font-medium">Size</th>
-                      <th className="pb-2 font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {stats.recent_files.map((file) => (
-                      <tr
-                        key={file.id}
-                        className="cursor-pointer hover:bg-accent/50"
-                        onClick={() => file.sheets[0] && handleSheetSelect(file, file.sheets[0])}
-                      >
-                        <td className="py-2 pr-4 font-medium">{file.display_name}</td>
-                        <td className="py-2 pr-4 tabular-nums text-muted-foreground">{file.sheet_count}</td>
-                        <td className="py-2 pr-4 tabular-nums text-muted-foreground">
-                          {file.total_rows.toLocaleString()}
-                        </td>
-                        <td className="py-2 pr-4 text-muted-foreground">{formatBytes(file.size_bytes)}</td>
-                        <td className="py-2">
-                          <StatusBadge status={file.status} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="divide-y divide-border">
+                {stats.recent_files.map((file) => (
+                  <button
+                    key={file.id}
+                    className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-accent/60"
+                    onClick={() => file.sheets[0] && handleSheetSelect(file, file.sheets[0])}
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
+                      <FileSpreadsheet className="h-[18px] w-[18px] text-emerald-500" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{file.display_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {file.sheet_count} sheet{file.sheet_count !== 1 ? 's' : ''} · {file.total_rows.toLocaleString()} rows · {formatBytes(file.size_bytes)}
+                      </p>
+                    </div>
+                    <StatusBadge status={file.status} />
+                  </button>
+                ))}
               </div>
             )}
           </CardContent>

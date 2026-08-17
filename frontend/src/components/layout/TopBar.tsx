@@ -35,16 +35,18 @@ export function TopBar() {
     .slice(0, 2)
 
   return (
-    <header className="flex h-12 items-center justify-between border-b border-border bg-background px-4">
+    <header className="glass-surface relative z-10 flex h-12 items-center justify-between border-b border-border px-4">
+      <div className="brand-gradient pointer-events-none absolute inset-x-0 top-0 h-[2px] opacity-70" />
+
       {/* Brand */}
       <Logo size="sm" />
 
       {/* User menu */}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
-          <button className="flex items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <Avatar.Root className="h-7 w-7 rounded-full bg-primary">
-              <Avatar.Fallback className="flex h-full w-full items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
+          <button className="flex items-center gap-2 rounded-full px-2 py-1 text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <Avatar.Root className="brand-gradient h-7 w-7 rounded-full shadow-soft">
+              <Avatar.Fallback className="flex h-full w-full items-center justify-center rounded-full text-xs font-semibold text-white">
                 {initials}
               </Avatar.Fallback>
             </Avatar.Root>
@@ -58,7 +60,7 @@ export function TopBar() {
 
         <DropdownMenu.Portal>
           <DropdownMenu.Content
-            className="z-50 min-w-[180px] rounded-md border bg-popover p-1 shadow-md"
+            className="z-50 min-w-[180px] animate-fade-in-up rounded-xl border bg-popover p-1 shadow-soft-lg"
             align="end"
             sideOffset={4}
           >
