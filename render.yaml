@@ -1,0 +1,74 @@
+# Render Blueprint — Phase 6 will complete this.
+# This skeleton documents the intended service topology.
+
+services:
+  # ── Backend API ──────────────────────────────────────────────────────────────
+  - type: web
+    name: mindspread-api
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r backend/requirements.txt && cd backend && alembic upgrade head
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mindspread-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: mindspread-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_ORIGIN
+        value: https://mindspread.onrender.com  # update after frontend deploy
+      - key: ENVIRONMENT
+        value: production
+      - key: ANTHROPIC_API_KEY
+        sync: false  # set manually in dashboard
+      - key: SENTRY_DSN
+        sync: false
+
+  # ── Frontend static site ─────────────────────────────────────────────────────
+  - type: web
+    name: mindspread-frontend
+    env: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        value: https://mindspread-api.onrender.com  # update to actual backend URL
+
+  # ── Background worker (Phase 2+) ─────────────────────────────────────────────
+  # - type: worker
+  #   name: mindspread-worker
+  #   env: python
+  #   buildCommand: pip install -r backend/requirements.txt
+  #   startCommand: cd backend && arq app.worker.WorkerSettings
+  #   envVars:
+  #     - key: DATABASE_URL
+  #       fromDatabase:
+  #         name: mindspread-db
+  #         property: connectionString
+  #     - key: REDIS_URL
+  #       fromService:
+  #         type: redis
+  #         name: mindspread-redis
+  #         property: connectionString
+
+databases:
+  - name: mindspread-db
+    databaseName: mindspread
+    plan: starter
+
+  - name: mindspread-redis
+    type: redis
+    plan: starter
+    maxmemoryPolicy: noeviction

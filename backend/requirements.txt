@@ -1,0 +1,50 @@
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# ── Database (async) ──────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+# psycopg2 is used by alembic env.py for sync migrations
+psycopg2-binary==2.9.10
+
+# ── Validation / settings ─────────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.6.1
+email-validator==2.2.0
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+bcrypt==4.2.1
+python-jose==3.3.0
+
+# ── Cache / background tasks ──────────────────────────────────────────────────
+redis==5.2.1
+arq==0.26.1
+
+# ── File processing ───────────────────────────────────────────────────────────
+openpyxl==3.1.5
+pandas==2.2.3
+python-calamine==0.2.0
+
+# ── Analytics / AI assistant ──────────────────────────────────────────────────
+duckdb==1.1.3
+sqlglot==26.0.0
+anthropic==0.42.0
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+slowapi==0.1.9
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+structlog==24.4.0
+python-json-logger==2.0.7
+
+# ── Error tracking (optional, gated by SENTRY_DSN env var) ───────────────────
+sentry-sdk[fastapi]==2.19.2
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1
+anyio==4.7.0
